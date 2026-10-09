@@ -63,6 +63,7 @@ struct Launcher {
     logo: TextureHandle,
     glass_hwnd: Option<isize>,
     glass_maximized: Option<bool>,
+    window_shape: Option<(isize, i32, i32, i32)>,
     patch_app: Option<usize>,
     uninstall_target: Option<UninstallTarget>,
     tx: Sender<Event>,
@@ -98,6 +99,7 @@ impl Launcher {
             logo: load_logo(&cc.egui_ctx),
             glass_hwnd: None,
             glass_maximized: None,
+            window_shape: None,
             patch_app: None,
             uninstall_target: None,
             tx,
@@ -571,6 +573,7 @@ impl Launcher {
         let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
 
         // Initialize DWM Acrylic blur once per window instance
+        self.clip_window_corners(hwnd, ctx.pixels_per_point(), is_maximized);
         if self.glass_hwnd != Some(hwnd) {
             unsafe {
                 let backdrop: u32 = 3; // DWMSBT_TRANSIENTWINDOW (Acrylic)
@@ -611,6 +614,28 @@ impl Launcher {
                 DwmSetWindowAttribute(hwnd, 33, &corners as *const u32 as _, 4);
             }
             self.glass_maximized = Some(is_maximized);
+        }
+    }
+
+    fn clip_window_corners(&mut self, hwnd: isize, scale: f32, maximized: bool) {
+        let mut bounds = NativeRect { left: 0, top: 0, right: 0, bottom: 0 };
+        if unsafe { GetWindowRect(hwnd, &mut bounds) } == 0 { return; }
+        let width = bounds.right - bounds.left;
+        let height = bounds.bottom - bounds.top;
+        let diameter = if maximized { 0 } else { (40.0 * scale).round() as i32 };
+        let shape = (hwnd, width, height, diameter);
+        if self.window_shape == Some(shape) || width <= 0 || height <= 0 { return; }
+        unsafe {
+            let region = if maximized { 0 } else {
+                CreateRoundRectRgn(0, 0, width + 1, height + 1, diameter, diameter)
+            };
+            if !maximized && region == 0 { return; }
+            // Windows owns the region after success; release it only on failure.
+            if SetWindowRgn(hwnd, region, 1) != 0 {
+                self.window_shape = Some(shape);
+            } else if region != 0 {
+                DeleteObject(region);
+            }
         }
     }
 
@@ -1643,6 +1668,17 @@ struct WindowCompositionAttributeData {
 #[link(name = "user32")]
 unsafe extern "system" {
     fn FindWindowW(class: *const u16, window: *const u16) -> isize;
+    fn GetWindowRect(hwnd: isize, rect: *mut NativeRect) -> i32;
+    fn SetWindowRgn(hwnd: isize, region: isize, redraw: i32) -> i32;
+}
+
+#[repr(C)]
+struct NativeRect { left: i32, top: i32, right: i32, bottom: i32 }
+
+#[link(name = "gdi32")]
+unsafe extern "system" {
+    fn CreateRoundRectRgn(left: i32, top: i32, right: i32, bottom: i32, width: i32, height: i32) -> isize;
+    fn DeleteObject(object: isize) -> i32;
 }
 
 #[link(name = "kernel32")]
@@ -1702,6 +1738,7 @@ mod ui_tests {
             selected: Some(0), installed: HashMap::new(), remote: HashMap::new(), logs: HashMap::new(),
             recent: Vec::new(), status: String::new(), busy: None, checking: false,
             logo: load_logo(&ctx), glass_hwnd: None, glass_maximized: None, patch_app: None,
+            window_shape: None,
             uninstall_target: None, tx, rx,
         };
         let mut render = |events: Vec<egui::Event>| {
