@@ -1047,6 +1047,7 @@ impl Launcher {
             let open_rect = button_rect(0);
             if placed_button(ui, open_rect, can_manage, detail_button("Open", Color32::from_white_alpha(18))).clicked() {
                 self.open_index(index);
+                self.selected = None;
             }
             let update_rect = button_rect(1);
             let installed_on_disk = update::is_installed(&self.root, &id);
