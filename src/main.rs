@@ -476,7 +476,7 @@ fn layout(full: Rect) -> Places {
     let side_w = 224.0_f32;
     let side = Rect::from_min_max(inner.min, pos2(inner.min.x + side_w, inner.max.y));
     let sidebar_header = Rect::from_min_max(
-        pos2(side.min.x, card.min.y),
+        side.min,
         pos2(side.max.x, side.min.y + 42.0_f32),
     );
     let update_all = Rect::from_min_max(pos2(side.min.x, side.max.y - 42.0_f32), side.max);
@@ -1007,6 +1007,12 @@ impl Launcher {
                 ui.vertical(|ui| {
                     ui.add(Label::new(RichText::new(&name).size(24.0_f32).strong().color(TEXT)).selectable(false));
                     ui.label(RichText::new(group).size(14.0_f32).color(MUTED));
+                    ui.horizontal(|ui| {
+                        let link_text = |label: &str| RichText::new(label).size(14.0_f32).color(Color32::from_rgb(186, 176, 255));
+                        ui.hyperlink_to(link_text("GitHub"), format!("https://github.com/storytold/{id}"));
+                        ui.hyperlink_to(link_text("Releases"), format!("https://github.com/storytold/{id}/releases"));
+                        ui.hyperlink_to(link_text("Website"), format!("https://getartcraft.com/apps/{id}"));
+                    });
                 });
             });
             ui.add_space(14.0_f32);
@@ -1080,13 +1086,6 @@ impl Launcher {
                 self.patch_app = Some(index);
             }
             log_response.on_hover_cursor(CursorIcon::PointingHand);
-            ui.add_space(16.0_f32);
-            ui.horizontal(|ui| {
-                let link_text = |label: &str| RichText::new(label).size(14.0_f32).color(Color32::from_rgb(186, 176, 255));
-                ui.hyperlink_to(link_text("GitHub"), format!("https://github.com/storytold/{id}"));
-                ui.hyperlink_to(link_text("Releases"), format!("https://github.com/storytold/{id}/releases"));
-                ui.hyperlink_to(link_text("Website"), format!("https://getartcraft.com/apps/{id}"));
-            });
         });
 
         let rect = response.response.rect;
