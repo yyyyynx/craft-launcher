@@ -28,6 +28,8 @@ Apps marked **Not installed** show an **Install** button and grayscale icons. In
 
 Click **×** to hide CraftLauncher in the Windows system tray. Downloads and updates continue in the background. Click the tray icon to reopen the window, or right-click it and choose **Open CraftLauncher** or **Exit**. The icon may be inside the taskbar's hidden-icons arrow. Choose **Exit** before replacing the launcher executable.
 
+Only one instance runs per Windows session. Opening the executable again brings back the existing window, including when it is hidden in the tray.
+
 ## Supported apps
 
 | App | Category | Source |

@@ -3,6 +3,8 @@
 mod update;
 #[cfg(windows)]
 mod tray;
+#[cfg(windows)]
+mod instance;
 
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -356,6 +358,12 @@ fn spawn_check(tx: Sender<Event>) {
 }
 
 fn main() -> eframe::Result<()> {
+    #[cfg(windows)]
+    let _instance = match instance::SingleInstance::acquire()
+        .map_err(|error| eframe::Error::AppCreation(Box::new(error)))? {
+        Some(instance) => instance,
+        None => { instance::restore_existing(); return Ok(()); }
+    };
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([1220.0, 780.0])
         .with_min_inner_size([980.0, 620.0])
