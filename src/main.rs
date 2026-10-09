@@ -1057,6 +1057,13 @@ impl Launcher {
                 self.patch_app = Some(index);
             }
             log_response.on_hover_cursor(CursorIcon::PointingHand);
+            ui.add_space(16.0_f32);
+            ui.horizontal(|ui| {
+                let link_text = |label: &str| RichText::new(label).size(14.0_f32).color(Color32::from_rgb(186, 176, 255));
+                ui.hyperlink_to(link_text("GitHub"), format!("https://github.com/storytold/{id}"));
+                ui.hyperlink_to(link_text("Releases"), format!("https://github.com/storytold/{id}/releases"));
+                ui.hyperlink_to(link_text("Website"), format!("https://getartcraft.com/apps/{id}"));
+            });
         });
 
         let rect = response.response.rect;
