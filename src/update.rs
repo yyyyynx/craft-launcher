@@ -29,17 +29,18 @@ impl Group {
 pub struct CraftApp {
     pub id: &'static str,
     pub name: &'static str,
+    pub description: &'static str,
     pub group: Group,
 }
 
 pub const APPS: &[CraftApp] = &[
-    CraftApp { id: "photocraft", name: "PhotoCraft", group: Group::Image },
-    CraftApp { id: "vectorcraft", name: "VectorCraft", group: Group::Design },
-    CraftApp { id: "filmcraft", name: "FilmCraft", group: Group::Video },
-    CraftApp { id: "lightcraft", name: "LightCraft", group: Group::Image },
-    CraftApp { id: "pdfcraft", name: "PdfCraft", group: Group::Documents },
-    CraftApp { id: "effectcraft", name: "EffectCraft", group: Group::Video },
-    CraftApp { id: "designcraft", name: "DesignCraft", group: Group::Design },
+    CraftApp { id: "photocraft", name: "PhotoCraft", description: "Photo editing", group: Group::Image },
+    CraftApp { id: "vectorcraft", name: "VectorCraft", description: "Vector illustration", group: Group::Design },
+    CraftApp { id: "filmcraft", name: "FilmCraft", description: "Video editing", group: Group::Video },
+    CraftApp { id: "lightcraft", name: "LightCraft", description: "RAW photo development", group: Group::Image },
+    CraftApp { id: "pdfcraft", name: "PdfCraft", description: "PDF tools", group: Group::Documents },
+    CraftApp { id: "effectcraft", name: "EffectCraft", description: "Motion graphics", group: Group::Video },
+    CraftApp { id: "designcraft", name: "DesignCraft", description: "Layout and publishing", group: Group::Design },
 ];
 
 #[derive(Clone, Serialize, Deserialize)]

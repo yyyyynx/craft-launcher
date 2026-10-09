@@ -980,7 +980,7 @@ impl Launcher {
         let app = &APPS[index];
         let id = app.id.to_string();
         let name = app.name.to_string();
-        let group = app.group.label();
+        let description = app.description;
         let installed = self.installed.get(&id).cloned().unwrap_or_default();
         let remote = self.remote.get(&id).cloned();
         let logs = self.logs.get(&id).cloned().unwrap_or_default();
@@ -1014,7 +1014,7 @@ impl Launcher {
                 ui.add_space(12.0_f32);
                 ui.vertical(|ui| {
                     ui.add(Label::new(RichText::new(&name).size(24.0_f32).strong().color(TEXT)).selectable(false));
-                    ui.label(RichText::new(group).size(14.0_f32).color(MUTED));
+                    ui.label(RichText::new(description).size(14.0_f32).color(MUTED));
                     ui.horizontal(|ui| {
                         let link_text = |label: &str| RichText::new(label).size(14.0_f32).color(Color32::from_rgb(186, 176, 255));
                         ui.hyperlink_to(link_text("GitHub"), format!("https://github.com/storytold/{id}"));
