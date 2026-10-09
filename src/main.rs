@@ -20,6 +20,7 @@ use update::{CraftApp, Group, LogEntry, RemoteInfo, APPS};
 const TEXT: Color32 = Color32::from_rgb(244, 242, 250);
 const MUTED: Color32 = Color32::from_rgb(166, 162, 184);
 const ACCENT: Color32 = Color32::from_rgb(124, 108, 242);
+const BACKGROUND: Color32 = Color32::from_rgb(28, 25, 34);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Filter {
@@ -384,7 +385,7 @@ fn main() -> eframe::Result<()> {
 
 impl eframe::App for Launcher {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
+        BACKGROUND.to_normalized_gamma_f32()
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -408,7 +409,7 @@ impl eframe::App for Launcher {
         egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
             let full = ui.max_rect();
             let places = layout(full);
-            paint_card(ui, places.card, is_maximized);
+            paint_card(ui, places.card);
 
             // Sidebar header (logo & brand)
             self.sidebar_header(ui, places.sidebar_header, is_maximized);
@@ -548,18 +549,10 @@ fn layout(full: Rect) -> Places {
     }
 }
 
-fn paint_card(ui: &mut egui::Ui, card: Rect, is_maximized: bool) {
-    let radius = if is_maximized { 0.0_f32 } else { 20.0_f32 };
-    // Rich translucent dark glass fill so window panel is distinctly visible and beautiful
-    ui.painter().rect_filled(card, radius, Color32::from_rgba_unmultiplied(16, 14, 26, 64));
-    if !is_maximized {
-        ui.painter().rect_stroke(
-            card,
-            radius,
-            Stroke::new(1.0_f32, Color32::from_white_alpha(22)),
-            StrokeKind::Inside,
-        );
-    }
+fn paint_card(ui: &mut egui::Ui, card: Rect) {
+    // Use the same opaque color as the framebuffer, including edge pixels.
+    // The native window region owns the outer curve.
+    ui.painter().rect_filled(card, 0.0_f32, BACKGROUND);
 }
 
 impl Launcher {
@@ -572,11 +565,11 @@ impl Launcher {
 
         let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
 
-        // Initialize DWM Acrylic blur once per window instance
+        // Keep native framing free of a second translucent background.
         self.clip_window_corners(hwnd, ctx.pixels_per_point(), is_maximized);
         if self.glass_hwnd != Some(hwnd) {
             unsafe {
-                let backdrop: u32 = 3; // DWMSBT_TRANSIENTWINDOW (Acrylic)
+                let backdrop: u32 = 1; // DWMSBT_NONE
                 DwmSetWindowAttribute(hwnd, 38, &backdrop as *const u32 as _, 4);
                 let dark: u32 = 1;
                 DwmSetWindowAttribute(hwnd, 20, &dark as *const u32 as _, 4);
@@ -586,8 +579,7 @@ impl Launcher {
                 let corners: u32 = if is_maximized { 1 } else { 2 };
                 DwmSetWindowAttribute(hwnd, 33, &corners as *const u32 as _, 4);
 
-                // AABBGGRR translucent acrylic blur tint
-                let policy = AccentPolicy { state: 4, flags: 2, gradient: 0x60201626, animation_id: 0 };
+                let policy = AccentPolicy { state: 0, flags: 0, gradient: 0, animation_id: 0 };
                 let mut data = WindowCompositionAttributeData {
                     attribute: 19,
                     data: &policy as *const AccentPolicy as *mut _,
@@ -627,7 +619,7 @@ impl Launcher {
         if self.window_shape == Some(shape) || width <= 0 || height <= 0 { return; }
         unsafe {
             let region = if maximized { 0 } else {
-                CreateRoundRectRgn(0, 0, width + 1, height + 1, diameter, diameter)
+                CreateRoundRectRgn(0, 0, width, height, diameter, diameter)
             };
             if !maximized && region == 0 { return; }
             // Windows owns the region after success; release it only on failure.
