@@ -288,7 +288,9 @@ impl Launcher {
         let Some(target) = self.uninstall_target else { return };
         let mut confirm = false;
         let mut cancel = false;
-        let response = egui::Modal::new(Id::new("confirm-uninstall")).show(ctx, |ui| {
+        let response = egui::Modal::new(Id::new("confirm-uninstall"))
+            .frame(egui::Frame::popup(&ctx.style()).inner_margin(24.0_f32).corner_radius(16.0_f32))
+            .show(ctx, |ui| {
             ui.set_width(380.0_f32);
             let title = match target {
                 UninstallTarget::App(index) => format!("Uninstall {}?", APPS[index].name),
