@@ -1,6 +1,8 @@
 #![cfg_attr(all(not(debug_assertions), not(test)), windows_subsystem = "windows")]
 
 mod update;
+#[cfg(windows)]
+mod tray;
 
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -41,6 +43,8 @@ enum UninstallTarget {
 }
 
 struct Launcher {
+    #[cfg(windows)]
+    tray: Option<tray::SystemTray>,
     root: std::path::PathBuf,
     icons: HashMap<String, TextureHandle>,
     uninstalled_icons: HashMap<String, TextureHandle>,
@@ -71,6 +75,11 @@ impl Launcher {
         let (tx, rx) = mpsc::channel();
         spawn_check(tx.clone());
         Self {
+            #[cfg(windows)]
+            tray: match tray::SystemTray::new(&cc.egui_ctx) {
+                Ok(tray) => Some(tray),
+                Err(error) => { eprintln!("Could not create system tray: {error}"); None }
+            },
             icons: load_icons(&cc.egui_ctx, &root, false),
             uninstalled_icons: load_icons(&cc.egui_ctx, &root, true),
             installed: update::installed_versions(&root).into_iter().collect(),
@@ -369,6 +378,15 @@ impl eframe::App for Launcher {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(windows)]
+        if ctx.input(|i| i.viewport().close_requested()) {
+            if let Some(tray) = &self.tray {
+                if !tray.exiting() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                }
+            }
+        }
         self.poll();
         self.apply_glass(ctx);
         if self.busy.is_some() || self.checking {
@@ -634,6 +652,11 @@ impl Launcher {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
         }
         if window_button(ui, "title-close", places.close, WindowBtn::Close) {
+            #[cfg(windows)]
+            if self.tray.is_some() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                return;
+            }
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
@@ -1664,6 +1687,8 @@ mod ui_tests {
         apply_style(&ctx);
         let (tx, rx) = mpsc::channel();
         let mut launcher = Launcher {
+            #[cfg(windows)]
+            tray: None,
             root: std::env::temp_dir().join(format!("craft-ui-test-{}", std::process::id())),
             icons: HashMap::new(), uninstalled_icons: HashMap::new(), search: String::new(), filter: Filter::All,
             selected: Some(0), installed: HashMap::new(), remote: HashMap::new(), logs: HashMap::new(),

@@ -17,5 +17,8 @@ serde_json = "1"
 ureq = { version = "2.12", features = ["json"] }
 zip = "2"
 
+[target.'cfg(windows)'.dependencies]
+tray-icon = { version = "0.26", default-features = false }
+
 [build-dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "ico"] }

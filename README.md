@@ -26,6 +26,8 @@ Project repository: [yyyyynx/craft-launcher](https://github.com/yyyyynx/craft-la
 
 Apps marked **Not installed** show an **Install** button and grayscale icons. Installed apps show **Update** when a newer release is available. Close an app before updating it.
 
+Click **×** to hide CraftLauncher in the Windows system tray. Downloads and updates continue in the background. Click the tray icon to reopen the window, or right-click it and choose **Open CraftLauncher** or **Exit**. The icon may be inside the taskbar's hidden-icons arrow. Choose **Exit** before replacing the launcher executable.
+
 ## Supported apps
 
 | App | Category | Source |
