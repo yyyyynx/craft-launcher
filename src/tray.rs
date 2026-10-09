@@ -8,6 +8,7 @@ pub struct SystemTray {
     // Dropping this handle removes the icon and its menu.
     _icon: TrayIcon,
     exit_requested: Arc<AtomicBool>,
+    hwnd: isize,
 }
 
 impl SystemTray {
@@ -50,7 +51,13 @@ impl SystemTray {
                 restore(&tray_ctx, hwnd);
             }
         }));
-        Ok(Self { _icon: icon, exit_requested })
+        Ok(Self { _icon: icon, exit_requested, hwnd })
+    }
+
+    pub fn hide(&self) {
+        // Keep hide/restore native: egui cannot process visibility commands
+        // reliably while hidden, and stale commands affect later window actions.
+        unsafe { ShowWindow(self.hwnd, 0); }
     }
 
     pub fn exiting(&self) -> bool {
@@ -64,9 +71,6 @@ fn restore(ctx: &Context, hwnd: isize) {
         ShowWindow(hwnd, if IsIconic(hwnd) != 0 { 9 } else { 5 });
         SetForegroundWindow(hwnd);
     }
-    ctx.send_viewport_cmd(ViewportCommand::Visible(true));
-    ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
-    ctx.send_viewport_cmd(ViewportCommand::Focus);
     ctx.request_repaint();
 }
 

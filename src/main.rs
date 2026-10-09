@@ -394,7 +394,7 @@ impl eframe::App for Launcher {
             if let Some(tray) = &self.tray {
                 if !tray.exiting() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    tray.hide();
                 }
             }
         }
@@ -610,6 +610,7 @@ impl Launcher {
     }
 
     fn clip_window_corners(&mut self, hwnd: isize, scale: f32, maximized: bool) {
+        if unsafe { IsIconic(hwnd) } != 0 { return; }
         let mut bounds = NativeRect { left: 0, top: 0, right: 0, bottom: 0 };
         if unsafe { GetWindowRect(hwnd, &mut bounds) } == 0 { return; }
         let width = bounds.right - bounds.left;
@@ -671,15 +672,19 @@ impl Launcher {
 
         // Window controls
         if window_button(ui, "title-min", places.minimize, WindowBtn::Minimize) {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            if let Some(hwnd) = self.glass_hwnd {
+                unsafe { ShowWindow(hwnd, 6); }
+            }
         }
         if window_button(ui, "title-max", places.maximize, WindowBtn::Maximize(is_maximized)) {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
+            if let Some(hwnd) = self.glass_hwnd {
+                unsafe { ShowWindow(hwnd, if IsZoomed(hwnd) != 0 { 9 } else { 3 }); }
+            }
         }
         if window_button(ui, "title-close", places.close, WindowBtn::Close) {
             #[cfg(windows)]
-            if self.tray.is_some() {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            if let Some(tray) = &self.tray {
+                tray.hide();
                 return;
             }
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1662,6 +1667,9 @@ unsafe extern "system" {
     fn FindWindowW(class: *const u16, window: *const u16) -> isize;
     fn GetWindowRect(hwnd: isize, rect: *mut NativeRect) -> i32;
     fn SetWindowRgn(hwnd: isize, region: isize, redraw: i32) -> i32;
+    fn ShowWindow(hwnd: isize, command: i32) -> i32;
+    fn IsIconic(hwnd: isize) -> i32;
+    fn IsZoomed(hwnd: isize) -> i32;
 }
 
 #[repr(C)]
