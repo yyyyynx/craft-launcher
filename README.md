@@ -95,7 +95,7 @@ CraftLauncher is a separate launcher project. The ArtCraft apps remain the work 
 
 ## Build from source
 
-For developers, use a Rust toolchain supporting edition 2024 and a Windows build environment:
+For developers, use a Rust toolchain supporting edition 2024 and a Windows build environment including the Windows SDK. The build automatically embeds the launcher icon into the executable.
 
 ```powershell
 cargo build --release --locked
