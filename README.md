@@ -32,15 +32,17 @@ Only one instance runs per Windows session. Opening the executable again brings 
 
 ## Supported apps
 
-| App | Category | Source |
-| --- | --- | --- |
-| PhotoCraft | Image | [storytold/photocraft](https://github.com/storytold/photocraft) |
-| VectorCraft | Design | [storytold/vectorcraft](https://github.com/storytold/vectorcraft) |
-| FilmCraft | Video | [storytold/filmcraft](https://github.com/storytold/filmcraft) |
-| LightCraft | Image | [storytold/lightcraft](https://github.com/storytold/lightcraft) |
-| PdfCraft | Documents | [storytold/pdfcraft](https://github.com/storytold/pdfcraft) |
-| EffectCraft | Video | [storytold/effectcraft](https://github.com/storytold/effectcraft) |
-| DesignCraft | Design | [storytold/designcraft](https://github.com/storytold/designcraft) |
+| App | Description | Category | Source |
+| --- | --- | --- | --- |
+| PhotoCraft | Photo editing | Image | [storytold/photocraft](https://github.com/storytold/photocraft) |
+| VectorCraft | Vector illustration | Design | [storytold/vectorcraft](https://github.com/storytold/vectorcraft) |
+| FilmCraft | Video editing | Video | [storytold/filmcraft](https://github.com/storytold/filmcraft) |
+| LightCraft | RAW photo development | Image | [storytold/lightcraft](https://github.com/storytold/lightcraft) |
+| PdfCraft | PDF tools | Documents | [storytold/pdfcraft](https://github.com/storytold/pdfcraft) |
+| EffectCraft | Motion graphics | Video | [storytold/effectcraft](https://github.com/storytold/effectcraft) |
+| DesignCraft | Layout and publishing | Design | [storytold/designcraft](https://github.com/storytold/designcraft) |
+
+Each app popup shows a short description below its name, followed by **GitHub**, **Releases**, and **Website** links. The sidebar categories remain available for filtering apps.
 
 ## Features
 
@@ -50,6 +52,9 @@ Only one instance runs per Windows session. Opening the executable again brings 
 - Uninstall an individual app beside **Update**, or use **Uninstall all** in the sidebar.
 - Search by app name and browse by category, available updates, or recently opened apps.
 - Read release notes and local update history in each app's **Update log**.
+- Visit each app's source, releases, and website directly from its popup.
+- Hide the launcher in the system tray while downloads and updates continue.
+- Reopen the existing window when launching again, with one tray icon per Windows session.
 - Enjoy a compact interface with acrylic glass and rounded corners.
 
 ## Where files are stored
@@ -87,7 +92,9 @@ Uninstall removes the selected app folder, including any portable settings or pr
 - **A release file is missing:** the upstream release may not include the Windows package expected by the launcher. Check the app's repository linked above.
 - **Files cannot be saved:** check free disk space and write access to `%LOCALAPPDATA%\CraftLauncher`.
 
-App updates come from each app's GitHub releases. To update CraftLauncher itself, download the new `CraftLauncher.exe`, close the launcher, and replace the old file in the same folder.
+App updates come from each app's GitHub releases. To update CraftLauncher itself, download the new `CraftLauncher.exe`, right-click its tray icon and choose **Exit**, then replace the old executable. Clicking **×** only hides the launcher. Your installed apps and update history are kept.
+
+See [CraftLauncher v0.1.1 release notes](RELEASE_NOTES.md) for the latest changes.
 
 ## Special thanks
 
