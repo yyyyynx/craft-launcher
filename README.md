@@ -120,11 +120,11 @@ See [CraftLauncher v0.9.0 release notes](RELEASE_NOTES.md) for the latest change
 
 | Version | Changes |
 | --- | --- |
-| v0.1.0 | Initial Windows launcher for seven ArtCraft apps, individual installation and updates, category filters, search, update history, uninstall, and storage in LocalAppData. |
-| v0.1.1 | System tray support, app website and GitHub links, cleaner centered popups, aligned header controls, and a single-instance guard to prevent duplicate tray icons. |
-| v0.1.2 | Clearer installation and launch errors, version metadata in the executable, corrected window controls, consistent rounded window edges, brighter update indicators, and clearer log dates. |
-| v0.2.0 | Persistent Favorites with star buttons, a Favorites filter, app counts, and search. |
-| v0.9.0 Public beta | Download percentage and file size, Cancel and Retry, direct portable downloads, staged installation and rollback, startup recovery, in-app launcher updates with checksum verification, Settings, installed size, app folders, Repair, optional portable-data removal, and Windows CI builds with release checksums. Smaller rounded favorite stars and padded, fixed Settings window. |
+| v0.1.0 | First Windows launcher for all seven ArtCraft apps. Install, open, update individually or with Update all, and uninstall one or all apps. Search, category/update/recent filters, release notes and local update history, grayscale uninstalled icons, and app storage in LocalAppData. Follow-up polish added uninstall dialog padding and an embedded Windows executable icon. |
+| v0.1.1 | System tray hide/reopen/Exit while downloads continue. Single-instance protection restores the existing window instead of adding another tray icon. GitHub/Releases/Website links below short app descriptions, retained category filters, and aligned launcher header controls. |
+| v0.1.2 | Readable error dialogs for launch/download/update failures; failed launches keep the app popup open and successful Open actions close it. Launcher version in the header and executable metadata. Correct close/minimize/maximize behavior after tray restore, uniform dark rounded window edges, an outlined purple update dot, brighter available-version text, versions beside app names, and log dates with years for new entries. |
+| v0.2.0 | Persistent favorite stars on app cards, gold selected stars, a Favorites sidebar filter with counts and search, support for uninstalled favorites, and star clicks that do not open the app popup. |
+| v0.9.0 Public beta | Download bytes, total size and percentages; Cancel/Retry; direct portable downloads; staged app updates, rollback and startup recovery. In-app launcher updates with SHA-256 checks and restart/replacement recovery. Saved Settings for startup checks, beta releases and tray behavior. App sizes, Open app folder, Repair / Reinstall, and optional portable-data deletion. Lucide favorite stars that scale with app cards, PT Sans with symbol fallback, smaller launcher icons, consistent Settings fonts, a dimmed Settings modal with a circular close button, Uninstall All Apps in Settings, compact management badges beside bottom-aligned installed size, and improved uninstall checkbox/footer layout. Windows CI, executable/checksum assets and draft-release tooling. |
 
 The intermediate roadmap milestones v0.3.0–v0.8.0 were consolidated into v0.9.0 rather than published as separate versions. Launcher updates and Settings (v0.3.0), app management (v0.4.0), and build/release tooling (v0.5.0) are included in this beta. This table records implemented versions; it does not claim separate releases for intermediate milestones.
 
@@ -139,6 +139,8 @@ Special thanks to **[storytold](https://github.com/storytold)**, the creator of 
 Thank you as well to everyone who contributes to the ArtCraft projects through code, bug reports, documentation, and feedback.
 
 Favorite star icons are from [Lucide](https://lucide.dev/). Their original SVG and license are included in `assets/icons`; PNG variants are embedded in the executable.
+
+The interface uses PT Sans from Google Fonts. The embedded font and its SIL Open Font License are included in `assets/PTSans-Regular.ttf` and `assets/PTSans-OFL.txt`. Built-in fallback fonts cover symbols unavailable in PT Sans.
 
 CraftLauncher is a separate launcher project. The ArtCraft apps remain the work of their respective creators and contributors; each app's own license and notices apply.
 
