@@ -6,8 +6,6 @@ Current version: **v0.9.0 Public beta**.
 
 A native Windows launcher for opening, downloading, and updating the ArtCraft creative apps. Choose an app, get its latest portable build, and start creating.
 
-![CraftLauncher logo](assets/artlauncher.png)
-
 ## Download
 
 ### [Download CraftLauncher.exe](https://github.com/yyyyynx/craft-launcher/raw/HEAD/CraftLauncher.exe)
