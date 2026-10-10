@@ -6,7 +6,7 @@ This file records changes in the implemented launcher versions, including follow
 
 ## Downloads and app updates
 
-- Download progress with percentages and file sizes, plus Cancel and Retry.
+- Download progress with percentages and file sizes, plus Retry after failed attempts. The download Cancel button was removed in UI polish.
 - Direct portable downloads without waiting for source repositories.
 - Stage app updates before replacing the installed copy; restore previous files on failure and recover interrupted replacements on startup.
 - Show downloaded bytes when the server does not provide a total size. Retry starts a fresh download; partial downloads are not resumed.

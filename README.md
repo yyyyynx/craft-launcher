@@ -53,7 +53,7 @@ Each app popup shows a short description below its name, followed by **GitHub**,
 - Open all seven apps from one window.
 - Check for releases automatically at startup, or click **Check for updates**.
 - Download or update one app at a time, or use **Update all**.
-- See download percentages and file sizes, cancel a download, or retry a failed attempt.
+- See download percentages and file sizes, or retry a failed attempt.
 - Download portable app releases directly, without cloning source repositories.
 - Keep the previous app until a staged update is ready; restore it if installation fails.
 - Repair an installation, see its disk usage, and open its app folder.
@@ -94,7 +94,7 @@ Git and Rust are not needed to install apps. Downloads use the prebuilt portable
 
 During updates, the downloaded package and a prepared copy of the app use temporary disk space on the same drive as app storage. Existing portable files are copied into the prepared installation before release files are overlaid. The old app stays in place during downloading and unpacking. A failed installation restores the old app; interrupted replacements are recovered on the next startup. Recovery files are retained if cleanup or recovery needs attention.
 
-Cancel stops the current download or preparation step. Network requests may take a few seconds to stop. The final replacement runs to completion once it begins. Retry starts a fresh download; partial downloads are not resumed. When the server does not provide a file size, the launcher displays downloaded bytes instead of a percentage.
+Downloads and installation run to completion without a Cancel button. Retry starts a fresh download; partial downloads are not resumed. When the server does not provide a file size, the launcher displays downloaded bytes instead of a percentage.
 
 ## Uninstall apps
 
@@ -124,7 +124,7 @@ See [CraftLauncher v0.9.0 release notes](RELEASE_NOTES.md) for the latest change
 | v0.1.1 | System tray hide/reopen/Exit while downloads continue. Single-instance protection restores the existing window instead of adding another tray icon. GitHub/Releases/Website links below short app descriptions, retained category filters, and aligned launcher header controls. |
 | v0.1.2 | Readable error dialogs for launch/download/update failures; failed launches keep the app popup open and successful Open actions close it. Launcher version in the header and executable metadata. Correct close/minimize/maximize behavior after tray restore, uniform dark rounded window edges, an outlined purple update dot, brighter available-version text, versions beside app names, and log dates with years for new entries. |
 | v0.2.0 | Persistent favorite stars on app cards, gold selected stars, a Favorites sidebar filter with counts and search, support for uninstalled favorites, and star clicks that do not open the app popup. |
-| v0.9.0 Public beta | Download bytes, total size and percentages; Cancel/Retry; direct portable downloads; staged app updates, rollback and startup recovery. In-app launcher updates with SHA-256 checks and restart/replacement recovery. Saved Settings for startup checks, beta releases and tray behavior. App sizes, Open app folder, Repair / Reinstall, and optional portable-data deletion. Lucide favorite stars that scale with app cards, PT Sans with symbol fallback, smaller launcher icons, consistent Settings fonts, a dimmed Settings modal with a circular close button, Uninstall All Apps in Settings, compact management badges beside bottom-aligned installed size, and improved uninstall checkbox/footer layout. Windows CI, executable/checksum assets and draft-release tooling. |
+| v0.9.0 Public beta | Download bytes, total size and percentages; Retry; direct portable downloads; staged app updates, rollback and startup recovery. In-app launcher updates with SHA-256 checks and restart/replacement recovery. Saved Settings for startup checks, beta releases and tray behavior. App sizes, Open app folder, Repair / Reinstall, and optional portable-data deletion. Lucide favorite stars that scale with app cards, PT Sans with symbol fallback, smaller launcher icons, consistent Settings fonts, a dimmed Settings modal with a circular close button, Uninstall All Apps in Settings, compact management badges beside bottom-aligned installed size, and improved uninstall checkbox/footer layout. Windows CI, executable/checksum assets and draft-release tooling. |
 
 The intermediate roadmap milestones v0.3.0–v0.8.0 were consolidated into v0.9.0 rather than published as separate versions. Launcher updates and Settings (v0.3.0), app management (v0.4.0), and build/release tooling (v0.5.0) are included in this beta. This table records implemented versions; it does not claim separate releases for intermediate milestones.
 

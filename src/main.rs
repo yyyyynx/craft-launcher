@@ -11,7 +11,7 @@ mod instance;
 
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{Arc, atomic::AtomicBool};
 use std::thread;
 use std::time::Duration;
 
@@ -781,18 +781,23 @@ impl Launcher {
 
     fn download_controls(&mut self, ui: &mut egui::Ui) {
         let mut retry = false;
-                ui.label(&self.status);
-                if let Some(p) = &self.progress {
-                    if let Some(total) = p.total.filter(|v| *v > 0) {
-                        ui.add(egui::ProgressBar::new((p.received as f64 / total as f64) as f32).show_percentage());
-                        ui.label(format!("{} / {}", transfer::size(p.received), transfer::size(total)));
-                    } else { ui.spinner(); ui.label(format!("{} downloaded", transfer::size(p.received))); }
+        ui.label(&self.status);
+        let size_text = self.progress.as_ref().map(|p| {
+            if let Some(total) = p.total.filter(|v| *v > 0) {
+                ui.add(egui::ProgressBar::new((p.received as f64 / total as f64) as f32).show_percentage());
+                format!("{} / {}", transfer::size(p.received), transfer::size(total))
+            } else {
+                ui.spinner();
+                format!("{} downloaded", transfer::size(p.received))
+            }
+        });
+        ui.allocate_ui_with_layout(vec2(ui.available_width(), if self.busy.is_none() { 34.0 } else { ui.spacing().interact_size.y }), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if let Some(text) = size_text { ui.label(text); }
+                if self.busy.is_none() {
+                    ui.spacing_mut().button_padding = vec2(12.0, 8.0);
+                    retry = ui.add(ghost_button("Retry")).clicked();
                 }
-                if self.busy.is_some() {
-                    if ui.add_enabled(!self.cancel.load(Ordering::Relaxed) && !self.status.ends_with(": installing..."), Button::new("Cancel")).clicked() {
-                        self.cancel.store(true, Ordering::Relaxed);
-                    }
-                } else { retry = ui.button("Retry").clicked(); }
+        });
         if retry { if let Some(job) = self.retry.clone() { self.start_download(job); } }
     }
 
@@ -2164,24 +2169,6 @@ mod ui_tests {
             pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default(),
         }]);
         assert!(requested, "Clicking Install in the modal must request installation");
-    }
-
-    #[test]
-    fn cancel_download_is_clickable_inside_app_modal() {
-        let (ctx, mut launcher) = test_launcher();
-        launcher.busy = Some("photocraft".into());
-        launcher.retry = Some(DownloadJob::App { id: "photocraft".into(), repair: false });
-        launcher.progress = Some(transfer::Progress { received: 20, total: Some(100) });
-        launcher.status = "PhotoCraft: downloading...".into();
-        let mut render = |events| ctx.run(egui::RawInput {
-            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1220.0, 780.0))), events, ..Default::default()
-        }, |ctx| { egui::Modal::new(Id::new("app-details-popup")).frame(egui::Frame::NONE).show(ctx, |ui| launcher.app_details(ui)); });
-        for _ in 0..3 { render(Vec::new()); }
-        let output = render(Vec::new());
-        let pos = output.shapes.iter().find_map(|shape| text_rect(&shape.shape, "Cancel")).unwrap().center();
-        render(vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }]);
-        render(vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }]);
-        assert!(launcher.cancel.load(Ordering::Relaxed));
     }
 
     #[test]
