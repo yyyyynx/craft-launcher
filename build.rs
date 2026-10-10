@@ -27,7 +27,11 @@ fn main() {
     let bottom = (bottom + 3).min(source.height());
     let cropped = imageops::crop_imm(&source, left, top, right - left, bottom - top).to_image();
     let frames: Vec<_> = [16, 24, 32, 48, 64, 128, 256].into_iter().map(|size| {
-        let scaled = imageops::resize(&cropped, size, size, imageops::FilterType::Lanczos3);
+        let inner = ((size as f32 * 0.86).round() as u32).max(1);
+        let logo = imageops::resize(&cropped, inner, inner, imageops::FilterType::Lanczos3);
+        let mut scaled = image::RgbaImage::new(size, size);
+        let offset = ((size - inner) / 2) as i64;
+        imageops::overlay(&mut scaled, &logo, offset, offset);
         IcoFrame::as_png(scaled.as_raw(), size, size, ExtendedColorType::Rgba8).expect("Icon frame")
     }).collect();
     let icon = out.join("CraftLauncher.ico");

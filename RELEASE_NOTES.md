@@ -9,6 +9,8 @@
 - Keep user-created portable data during uninstall, with an explicit option to delete it.
 - Windows CI tests, executable builds, and checksum assets for GitHub releases.
 - Smaller favorite stars with rounded edges and a padded Settings window that stays centered without collapsing.
+- Smaller launcher logos in the header and Windows icons, Uninstall all moved into Settings, and update status aligned with its check button.
+- PT Sans throughout the interface, consistent Settings text, a circular Settings close button and dimmed backdrop, and compact app management badges beside installed size.
 
 This beta includes the planned download, launcher update, app management, and release tooling changes from v0.2.0 onward. Favorites remain available. Download **CraftLauncher.exe** once to upgrade from older versions; future published releases can be installed from Settings. Windows 10/11 x64; executable currently unsigned.
 

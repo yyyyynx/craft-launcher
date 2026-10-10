@@ -59,7 +59,7 @@ Each app popup shows a short description below its name, followed by **GitHub**,
 - Repair an installation, see its disk usage, and open its app folder.
 - Configure startup checks and tray behavior in **Settings**.
 - Check, download, verify, and restart into newer CraftLauncher releases from **Settings**.
-- Uninstall an individual app beside **Update**, or use **Uninstall all** in the sidebar.
+- Uninstall an individual app beside **Update**, or use **Uninstall All Apps** in Settings.
 - Search by app name and browse by category, available updates, or recently opened apps.
 - Star favorite apps and browse them from the **Favorites** sidebar filter.
 - Read release notes and local update history in each app's **Update log**.
@@ -98,7 +98,7 @@ Cancel stops the current download or preparation step. Network requests may take
 
 ## Uninstall apps
 
-Select an app and click **Uninstall** beside **Update**, or choose **Uninstall all** in the sidebar. Confirm the removal in the dialog. Close an app before uninstalling it.
+Select an app and click **Uninstall** beside **Update**, or open **Settings** and choose **Uninstall All Apps**. Confirm the removal in the dialog. Close an app before uninstalling it.
 
 By default, uninstall removes files recorded in the downloaded package and keeps user-created portable files. Select **Delete portable data** to remove the entire app folder, including settings and projects inside it. Files saved elsewhere and update history are kept. An older installation without a package file list needs **Repair / Reinstall** before uninstalling with data preservation. Back up projects before uninstalling: files supplied by the package are treated as app files even if edited later.
 
@@ -129,6 +129,8 @@ See [CraftLauncher v0.9.0 release notes](RELEASE_NOTES.md) for the latest change
 The intermediate roadmap milestones v0.3.0–v0.8.0 were consolidated into v0.9.0 rather than published as separate versions. Launcher updates and Settings (v0.3.0), app management (v0.4.0), and build/release tooling (v0.5.0) are included in this beta. This table records implemented versions; it does not claim separate releases for intermediate milestones.
 
 Full details: [Release notes](RELEASE_NOTES.md).
+
+Beta test results and remaining environment checks: [Validation record](BETA_VALIDATION.md).
 
 ## Special thanks
 

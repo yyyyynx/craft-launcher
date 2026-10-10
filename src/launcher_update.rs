@@ -173,6 +173,52 @@ try {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Requires built launcher executable and an isolated native Windows session"]
+    fn native_update_downloads_verifies_waits_replaces_and_restarts() {
+        use std::{io::Write, net::TcpListener};
+        let fixture = std::env::var_os("CRAFT_QA_EXE").expect("Set CRAFT_QA_EXE to the built launcher");
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("user-data"); fs::create_dir_all(&data).unwrap();
+        let mut bytes = fs::read(fixture).unwrap(); bytes.extend_from_slice(b"craft-new-update-fixture");
+        let server = TcpListener::bind("127.0.0.1:0").unwrap(); let url = format!("http://{}/CraftLauncher.exe", server.local_addr().unwrap());
+        let payload = bytes.clone();
+        let serving = std::thread::spawn(move || {
+            let (mut stream, _) = server.accept().unwrap(); let mut request = [0; 2048]; let _ = stream.read(&mut request);
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", payload.len()).unwrap();
+            stream.write_all(&payload).unwrap();
+        });
+        let release = Release { version: "v0.9.0".into(), notes: String::new(), url, sha256: format!("{:x}", Sha256::digest(&bytes)), size: bytes.len() as u64 };
+        let mut received = 0;
+        let staged = prepare(&data, &release, &AtomicBool::new(false), &mut |p| received = p.received).unwrap();
+        serving.join().unwrap(); assert_eq!(received, release.size);
+        let target = dir.path().join("CraftLauncher.exe");
+        let mut old = bytes.clone(); old.extend_from_slice(b"craft-old-update-fixture"); fs::write(&target, &old).unwrap();
+        let old_hash = hash_file(&target).unwrap();
+        let mut parent = Command::new(&target).env("LOCALAPPDATA", &data).spawn().unwrap();
+        std::thread::sleep(Duration::from_secs(2));
+        assert!(parent.try_wait().unwrap().is_none(), "Close the workspace launcher before native QA");
+        let helper = dir.path().join("replace.ps1"); fs::write(&helper, REPLACE_SCRIPT).unwrap();
+        let errors = data.join("update-error.txt");
+        let mut updater = Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(helper).arg("-Target").arg(&target).arg("-Staged").arg(&staged).arg("-ParentId").arg(parent.id().to_string())
+            .arg("-Expected").arg(&release.sha256).arg("-ErrorFile").arg(&errors).env("LOCALAPPDATA", &data).spawn().unwrap();
+        std::thread::sleep(Duration::from_secs(1));
+        let kept_until_exit = hash_file(&target).unwrap() == old_hash;
+        parent.kill().unwrap(); parent.wait().unwrap();
+        let status = updater.wait().unwrap();
+        let updated = hash_file(&target).unwrap() == release.sha256;
+        // Only stop processes belonging to this temporary test executable.
+        let cleanup = Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command",
+            "$p = @(Get-Process CraftLauncher -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $env:CRAFT_QA_TARGET }); $p.Count; foreach ($item in $p) { Stop-Process -InputObject $item -Force; $null = $item.WaitForExit(5000) }"])
+            .env("CRAFT_QA_TARGET", &target).output().unwrap();
+        let restarted = String::from_utf8_lossy(&cleanup.stdout).trim() == "1";
+        assert!(kept_until_exit, "Replacement happened before the old launcher exited");
+        assert!(status.success(), "{:?}", fs::read_to_string(&errors));
+        assert!(updated && restarted, "Verified executable must replace and restart the old copy");
+        assert!(!errors.exists());
+    }
     #[test]
     fn release_page_tags_are_scoped_to_launcher_and_valid_versions() {
         let html = r#"<a href="/yyyyynx/craft-launcher/releases/tag/v0.10.0">release</a><a href="/yyyyynx/craft-launcher/releases/tag/v0.10.0">duplicate</a><a href="/yyyyynx/craft-launcher/releases/tag/not-a-version">bad</a><a href="/other/repo/releases/tag/v9.0.0">other</a>"#;

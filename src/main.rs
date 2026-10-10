@@ -398,6 +398,8 @@ impl Launcher {
             .frame(egui::Frame::popup(&ctx.style()).inner_margin(24.0_f32).corner_radius(16.0_f32))
             .show(ctx, |ui| {
             ui.set_width(380.0_f32);
+            ui.style_mut().text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(15.0));
+            ui.style_mut().text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(20.0));
             let title = match target {
                 UninstallTarget::App(index) => format!("Uninstall {}?", APPS[index].name),
                 UninstallTarget::All => "Uninstall all apps?".into(),
@@ -405,14 +407,20 @@ impl Launcher {
             ui.heading(title);
             ui.add_space(12.0_f32);
             ui.label("Remove the app files. Portable settings and projects are kept unless you choose to delete them below.");
-            ui.checkbox(&mut self.delete_portable_data, "Delete portable settings and projects too");
+            ui.scope(|ui| {
+                ui.spacing_mut().icon_width = 20.0;
+                ui.spacing_mut().icon_width_inner = 14.0;
+                ui.spacing_mut().interact_size.y = 32.0;
+                ui.add(egui::Checkbox::new(&mut self.delete_portable_data,
+                    RichText::new("Delete portable settings and projects too").size(15.0)));
+            });
             if self.delete_portable_data { ui.label(RichText::new("Deleting portable data cannot be undone.").color(Color32::from_rgb(255, 170, 170))); }
             ui.add_space(8.0_f32);
             ui.label("Files saved elsewhere and your update history will be kept. Close the apps before uninstalling.");
             ui.add_space(16.0_f32);
-            ui.horizontal(|ui| {
-                cancel = ui.add(ghost_button("Cancel")).clicked();
-                confirm = ui.add_enabled(self.busy.is_none(), uninstall_button("Uninstall")).clicked();
+            ui.allocate_ui_with_layout(vec2(ui.available_width(), 34.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                confirm = ui.add_enabled(self.busy.is_none(), uninstall_button_with_font("Uninstall", 15.0)).clicked();
+                cancel = ui.add(ghost_button_with_font("Cancel", 15.0)).clicked();
             });
         });
         if confirm {
@@ -570,9 +578,9 @@ impl eframe::App for Launcher {
                 self.selected = None;
             }
         }
-        self.uninstall_confirmation(ctx);
         self.download_panel(ctx);
         self.settings_panel(ctx);
+        self.uninstall_confirmation(ctx);
         if let Some(error) = self.error.clone() {
             let response = egui::Modal::new(Id::new("operation-error"))
                 .frame(egui::Frame::popup(&ctx.style()).inner_margin(24.0).corner_radius(16.0))
@@ -626,7 +634,7 @@ fn layout(full: Rect) -> Places {
     let update_all = Rect::from_min_max(pos2(side.min.x, side.max.y - 42.0_f32), side.max);
     let nav = Rect::from_min_max(
         pos2(side.min.x, sidebar_header.max.y + 12.0_f32),
-        pos2(side.max.x, update_all.min.y - 100.0_f32),
+        pos2(side.max.x, update_all.min.y - 56.0_f32),
     );
 
     // Main area starts after divider
@@ -796,22 +804,42 @@ impl Launcher {
         let mut download = false;
         let mut restart = false;
         let mut folder = false;
-        egui::Window::new("Settings").open(&mut open).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .default_width(480.0).resizable(false).movable(false).collapsible(false)
-            .frame(egui::Frame::window(&ctx.style()).inner_margin(22.0).corner_radius(14.0))
+        let response = egui::Modal::new(Id::new("settings-popup"))
+            .frame(egui::Frame::popup(&ctx.style()).inner_margin(22.0).corner_radius(14.0))
             .show(ctx, |ui| {
+                ui.set_width(480.0);
+                ui.style_mut().text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(15.0));
+                ui.style_mut().text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(15.0));
+                ui.style_mut().text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(20.0));
                 ui.spacing_mut().item_spacing.y = 10.0;
                 ui.spacing_mut().button_padding = vec2(12.0, 8.0);
+                let (header, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
+                ui.painter().text(header.center(), Align2::CENTER_CENTER, "Settings", egui::FontId::proportional(20.0), TEXT);
+                let close = Rect::from_center_size(pos2(header.right() - 14.0, header.center().y), vec2(28.0, 28.0));
+                if window_button(ui, "settings-close", close, WindowBtn::Close) { open = false; }
+                ui.add_space(4.0);
                 ui.checkbox(&mut self.settings.check_on_startup, "Check app updates on startup");
                 ui.checkbox(&mut self.settings.check_launcher_on_startup, "Check launcher updates on startup");
                 ui.checkbox(&mut self.settings.close_to_tray, "Close button hides to system tray");
-                ui.checkbox(&mut self.settings.beta_updates, "Include beta launcher releases");
-                let settings_button = |label: &str| Button::new(RichText::new(label.to_owned()).size(14.0)).min_size(vec2(0.0, 34.0)).corner_radius(8.0);
+                ui.checkbox(&mut self.settings.beta_updates, "Include beta launcher releases")
+                    .on_hover_text("Include prerelease versions of CraftLauncher. Turn off to receive stable releases only.");
+                let settings_button = |label: &str| Button::new(RichText::new(label.to_owned()).size(15.0)).min_size(vec2(0.0, 34.0)).corner_radius(8.0);
                 folder = ui.add(settings_button("Open launcher data folder")).clicked();
                 ui.separator();
-                ui.heading(format!("CraftLauncher v{}", env!("CARGO_PKG_VERSION")));
-                ui.label(&self.launcher_status);
-                check = ui.add_enabled(!self.launcher_checking, settings_button("Check launcher updates")).clicked();
+                let button_width = 198.0;
+                let text_width = (ui.available_width() - button_width - ui.spacing().item_spacing.x).max(80.0);
+                let title = ui.painter().layout(format!("CraftLauncher v{}", env!("CARGO_PKG_VERSION")),
+                    egui::TextStyle::Body.resolve(ui.style()), TEXT, text_width);
+                let status = ui.painter().layout(self.launcher_status.clone(),
+                    egui::TextStyle::Body.resolve(ui.style()), TEXT, text_width);
+                let text_height = title.size().y + 4.0 + status.size().y;
+                let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), text_height.max(34.0)), Sense::hover());
+                let text_top = pos2(row.left(), row.center().y - text_height * 0.5);
+                let status_top = text_top + vec2(0.0, title.size().y + 4.0);
+                ui.painter().galley(text_top, title, TEXT);
+                ui.painter().galley(status_top, status, TEXT);
+                let button_rect = Rect::from_center_size(pos2(row.right() - button_width * 0.5, row.center().y), vec2(button_width, 34.0));
+                check = placed_button(ui, button_rect, !self.launcher_checking, settings_button("Check launcher updates")).clicked();
                 if let Some(release) = &self.launcher_release {
                     let size = if release.size > 0 { transfer::size(release.size) } else { "Size available during download".into() };
                     ui.label(RichText::new(format!("v{} available · {size}", release.version.trim_start_matches('v'))).color(UPDATE_TEXT));
@@ -823,8 +851,15 @@ impl Launcher {
                     ui.label("Update verified and ready. Your installed apps will be kept.");
                     restart = ui.add_enabled(self.busy.is_none(), settings_button("Restart and update")).clicked();
                 }
+                ui.separator();
+                let can_uninstall = self.busy.is_none() && APPS.iter().any(|app| update::is_installed(&self.root, app.id));
+                ui.allocate_ui_with_layout(vec2(ui.available_width(), 34.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    if ui.add_enabled(can_uninstall, uninstall_button_with_font("Uninstall All Apps", 15.0).min_size(vec2(0.0, 34.0))).clicked() {
+                        self.uninstall_target = Some(UninstallTarget::All);
+                    }
+                });
             });
-        self.settings_open = open;
+        self.settings_open = open && !(self.uninstall_target.is_none() && response.should_close());
         if before != serde_json::to_string(&self.settings).unwrap_or_default() {
             if let Err(e) = self.settings.save(&self.root) { self.report_error(e); }
         }
@@ -852,7 +887,7 @@ impl Launcher {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
         }
 
-        let logo_rect = Rect::from_center_size(pos2(rect.left() + 20.0_f32, rect.center().y), vec2(32.0_f32, 32.0_f32));
+        let logo_rect = Rect::from_center_size(pos2(rect.left() + 20.0_f32, rect.center().y), vec2(28.0_f32, 28.0_f32));
         ui.painter().image(
             self.logo.id(),
             logo_rect,
@@ -1008,7 +1043,7 @@ impl Launcher {
         };
         let response = ui.put(
             update_all,
-            Button::new(RichText::new(label).size(13.5_f32).color(Color32::WHITE))
+            Button::new(RichText::new(label).size(15.0_f32).color(Color32::WHITE))
                 .fill(if enabled { ACCENT } else { Color32::from_rgba_unmultiplied(124, 108, 242, 120) })
                 .min_size(update_all.size())
                 .corner_radius(10.0_f32),
@@ -1021,18 +1056,12 @@ impl Launcher {
             }
         }
         response.on_hover_cursor(if enabled { CursorIcon::PointingHand } else { CursorIcon::NotAllowed });
-        let uninstall_rect = Rect::from_min_max(
+        let settings_rect = Rect::from_min_max(
             pos2(update_all.left(), update_all.top() - 44.0_f32),
             pos2(update_all.right(), update_all.top() - 8.0_f32),
         );
-        let can_uninstall = self.busy.is_none() && APPS.iter().any(|app| update::is_installed(&self.root, app.id));
-        let settings_rect = uninstall_rect.translate(vec2(0.0, -44.0));
         let settings_label = if self.launcher_release.is_some() { "Settings · Launcher update" } else { "Settings" };
-        if ui.put(settings_rect, Button::new(settings_label).corner_radius(10.0)).clicked() { self.settings_open = true; }
-        let response = placed_button(ui, uninstall_rect, can_uninstall, uninstall_button("Uninstall all"));
-        if response.clicked() {
-            self.uninstall_target = Some(UninstallTarget::All);
-        }
+        if ui.put(settings_rect, Button::new(RichText::new(settings_label).size(15.0)).corner_radius(10.0)).clicked() { self.settings_open = true; }
     }
 
     fn nav_row(&mut self, ui: &mut egui::Ui, rect: Rect, filter: Filter) {
@@ -1154,10 +1183,11 @@ impl Launcher {
         }
 
         let favorite = self.favorites.iter().any(|favorite| favorite == id);
-        let star_rect = Rect::from_center_size(icon_rect.left_top() + vec2(10.0, 10.0), vec2(28.0, 28.0));
+        let star_scale = (icon_size / 116.0).clamp(0.85, 1.85);
+        let star_rect = Rect::from_center_size(icon_rect.left_top() + vec2(10.0, 10.0) * star_scale, vec2(28.0, 28.0) * star_scale);
         let star_response = ui.interact(star_rect, Id::new(("favorite", id)), Sense::click());
-        ui.painter().circle_filled(star_rect.center(), 11.0, Color32::from_rgb(38, 34, 48));
-        paint_star(ui.painter(), star_rect.center(), if favorite { Color32::from_rgb(255, 215, 99) } else { TEXT }, favorite);
+        ui.painter().circle_filled(star_rect.center(), 11.0 * star_scale, Color32::from_rgb(38, 34, 48));
+        paint_star(ui.painter(), star_rect.center(), if favorite { Color32::from_rgb(255, 215, 99) } else { TEXT }, favorite, 16.0 * star_scale);
         if star_response.clicked() { self.toggle_favorite(id); }
         let star_hovered = star_response.hovered();
         star_response.on_hover_cursor(CursorIcon::PointingHand)
@@ -1295,12 +1325,23 @@ impl Launcher {
             ui.add_space(20.0_f32);
             if self.retry.is_some() { self.download_controls(ui); ui.add_space(12.0); }
             if can_manage {
-                if let Some(Ok(size)) = self.usage.get(&id) { ui.label(format!("Installed size: {}", transfer::size(*size))); }
                 ui.horizontal(|ui| {
-                    if ui.button("Open app folder").clicked() {
-                        if let Err(e) = update::open_folder(&update::app_folder(&self.root, &id)) { self.report_error(e); }
+                    if let Some(Ok(size)) = self.usage.get(&id) {
+                        let text = ui.painter().layout_no_wrap(format!("Installed size: {}", transfer::size(*size)),
+                            egui::TextStyle::Body.resolve(ui.style()), TEXT);
+                        let (rect, _) = ui.allocate_exact_size(vec2(text.size().x, 22.0), Sense::hover());
+                        ui.painter().galley(pos2(rect.left(), rect.bottom() - text.size().y), text, TEXT);
                     }
-                    if ui.button("Repair / Reinstall").clicked() { self.start_download(DownloadJob::App { id: id.clone(), repair: true }); }
+                    ui.allocate_ui_with_layout(vec2(ui.available_width(), 22.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.spacing_mut().button_padding = vec2(7.0, 3.0);
+                        ui.spacing_mut().interact_size.y = 22.0;
+                        let badge = |label: &str| Button::new(RichText::new(label.to_owned()).size(12.0).color(TEXT))
+                            .fill(Color32::from_white_alpha(18)).min_size(vec2(0.0, 22.0)).corner_radius(6.0);
+                        if ui.add(badge("Repair / Reinstall")).clicked() { self.start_download(DownloadJob::App { id: id.clone(), repair: true }); }
+                        if ui.add(badge("Open app folder")).clicked() {
+                            if let Err(e) = update::open_folder(&update::app_folder(&self.root, &id)) { self.report_error(e); }
+                        }
+                    });
                 });
                 ui.add_space(8.0);
             }
@@ -1452,7 +1493,7 @@ fn patch_section(ui: &mut egui::Ui, when: &str, title: &str, subtitle: &str, bod
     let label = if title.is_empty() { when.to_string() } else { title.to_string() };
     ui.painter().text(pos2(bar.left(), bar.center().y), Align2::LEFT_CENTER, label, egui::FontId::new(15.5_f32, FontFamily::Proportional), TEXT);
     if !when.is_empty() && !title.is_empty() {
-        let when = when.split_whitespace().filter(|part| !part.contains(':')).collect::<Vec<_>>().join(" ");
+        let when = log_date(when);
         let when_w = 116.0_f32;
         let when_rect = Rect::from_min_size(pos2(bar.right() - when_w, bar.center().y - 11.0_f32), vec2(when_w, 22.0_f32));
         ui.painter().rect_filled(when_rect, 11.0_f32, chip);
@@ -1480,6 +1521,18 @@ fn patch_section(ui: &mut egui::Ui, when: &str, title: &str, subtitle: &str, bod
         [pos2(ui.min_rect().left(), y), pos2(ui.max_rect().right(), y)],
         Stroke::new(1.0_f32, Color32::from_white_alpha(16)),
     );
+}
+
+fn log_date(when: &str) -> String {
+    if let Ok(date) = chrono::DateTime::parse_from_rfc3339(when) {
+        return date.format("%d %b %Y").to_string();
+    }
+    for format in ["%d %b %Y", "%d %b %Y %H:%M", "%Y-%m-%d %H:%M:%S"] {
+        if let Ok(date) = chrono::NaiveDate::parse_from_str(when, format) {
+            return date.format("%d %b %Y").to_string();
+        }
+    }
+    when.split_whitespace().filter(|part| !part.contains(':')).collect::<Vec<_>>().join(" ")
 }
 
 fn patch_bullets(body: &str) -> Vec<String> {
@@ -1614,14 +1667,18 @@ fn window_button(ui: &mut egui::Ui, id: &str, rect: Rect, kind: WindowBtn) -> bo
 }
 
 fn ghost_button(text: &str) -> Button<'_> {
-    Button::new(RichText::new(text).size(14.0_f32).color(TEXT))
+    ghost_button_with_font(text, 14.0)
+}
+
+fn ghost_button_with_font(text: &str, size: f32) -> Button<'_> {
+    Button::new(RichText::new(text).size(size).color(TEXT))
         .fill(Color32::from_white_alpha(18))
         .min_size(vec2(84.0_f32, 34.0_f32))
         .corner_radius(10.0_f32)
 }
 
-fn uninstall_button(text: &str) -> Button<'_> {
-    Button::new(RichText::new(text).size(13.5_f32).color(Color32::WHITE))
+fn uninstall_button_with_font(text: &str, size: f32) -> Button<'_> {
+    Button::new(RichText::new(text).size(size).color(Color32::WHITE))
         .fill(Color32::from_rgb(151, 49, 65))
         .min_size(vec2(90.0_f32, 34.0_f32))
         .corner_radius(10.0_f32)
@@ -1660,7 +1717,7 @@ fn paint_nav_icon(painter: &egui::Painter, rect: Rect, filter: Filter, color: Co
         Filter::All => paint_grid_icon(painter, center, color),
         Filter::Updates => paint_download(painter, center, color),
         Filter::Recent => paint_bolt(painter, center, color),
-        Filter::Favorites => paint_star(painter, center, color, true),
+        Filter::Favorites => paint_star(painter, center, color, true, 16.0),
         Filter::Group(Group::Image) => paint_folder(painter, center, color),
         Filter::Group(Group::Video) => paint_play(painter, center, color),
         Filter::Group(Group::Design) => paint_palette(painter, center, color),
@@ -1693,7 +1750,7 @@ fn paint_download(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
     painter.add(egui::Shape::convex_polygon(head, color, Stroke::NONE));
 }
 
-fn paint_star(painter: &egui::Painter, center: egui::Pos2, color: Color32, filled: bool) {
+fn paint_star(painter: &egui::Painter, center: egui::Pos2, color: Color32, filled: bool, size: f32) {
     let id = Id::new(("lucide-favorite-texture", filled));
     let ctx = painter.ctx();
     let texture = ctx.data(|data| data.get_temp::<TextureHandle>(id)).unwrap_or_else(|| {
@@ -1705,7 +1762,7 @@ fn paint_star(painter: &egui::Painter, center: egui::Pos2, color: Color32, fille
         ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
         texture
     });
-    painter.image(texture.id(), Rect::from_center_size(center, vec2(16.0, 16.0)),
+    painter.image(texture.id(), Rect::from_center_size(center, vec2(size, size)),
         Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), color);
 }
 fn paint_bolt(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
@@ -1809,7 +1866,9 @@ fn load_logo(ctx: &egui::Context) -> TextureHandle {
 }
 
 fn window_icon() -> Option<egui::IconData> {
-    let image = image::imageops::resize(&logo_rgba()?, 128, 128, image::imageops::FilterType::Triangle);
+    let logo = image::imageops::resize(&logo_rgba()?, 110, 110, image::imageops::FilterType::Lanczos3);
+    let mut image = image::RgbaImage::new(128, 128);
+    image::imageops::overlay(&mut image, &logo, 9, 9);
     let width = image.width();
     let height = image.height();
     Some(egui::IconData { rgba: image.into_raw(), width, height })
@@ -1934,13 +1993,15 @@ unsafe extern "system" {
 
 fn apply_style(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
-    let questrial = include_bytes!("../assets/Questrial-Regular.ttf").to_vec();
-    fonts.font_data.insert("questrial".to_owned(), std::sync::Arc::new(FontData::from_owned(questrial)));
+    let symbol_fallback = fonts.families[&FontFamily::Monospace].clone();
+    let pt_sans = include_bytes!("../assets/PTSans-Regular.ttf").to_vec();
+    fonts.font_data.insert("pt-sans".to_owned(), std::sync::Arc::new(FontData::from_owned(pt_sans)));
     for family in [FontFamily::Proportional, FontFamily::Monospace] {
         if let Some(list) = fonts.families.get_mut(&family) {
-            list.insert(0, "questrial".to_owned());
+            list.insert(0, "pt-sans".to_owned());
         }
     }
+    fonts.families.get_mut(&FontFamily::Proportional).unwrap().extend(symbol_fallback);
     ctx.set_fonts(fonts);
 
     let mut visuals = egui::Visuals::dark();
@@ -2110,5 +2171,25 @@ mod ui_tests {
         render(vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }]);
         render(vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }]);
         assert!(launcher.cancel.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn settings_update_button_centers_beside_version_and_status_at_common_scales() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let (ctx, mut launcher) = test_launcher();
+            ctx.set_pixels_per_point(scale);
+            launcher.settings_open = true;
+            launcher.launcher_status = "Launcher is up to date".into();
+            let mut render = || ctx.run(egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1024.0, 720.0))), ..Default::default()
+            }, |ctx| launcher.settings_panel(ctx));
+            for _ in 0..3 { render(); }
+            let output = render();
+            let status = output.shapes.iter().find_map(|shape| text_rect(&shape.shape, "Launcher is up to date")).unwrap();
+            let button = output.shapes.iter().find_map(|shape| text_rect(&shape.shape, "Check launcher updates")).unwrap();
+            let title = output.shapes.iter().find_map(|shape| text_rect(&shape.shape, concat!("CraftLauncher v", env!("CARGO_PKG_VERSION")))).unwrap();
+            assert!((title.union(status).center().y - button.center().y).abs() < 3.0, "Scale {scale}: button should center beside the text block");
+            assert!(status.right() < button.left(), "Scale {scale}: text should not overlap the button");
+        }
     }
 }

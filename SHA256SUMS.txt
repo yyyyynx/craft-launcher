@@ -1,1 +1,1 @@
-503bd1a003f3f62816b8dae2f0201f1bc08dcb36dd0d95323e044b7769aa4590  CraftLauncher.exe
+a491dbb6c44c87b90da6829ef46c1d08d00b5ea6b7e1cd7ccd9ba55a7981d82d  CraftLauncher.exe
