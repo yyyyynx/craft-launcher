@@ -20,6 +20,7 @@ use update::{CraftApp, Group, LogEntry, RemoteInfo, APPS};
 const TEXT: Color32 = Color32::from_rgb(244, 242, 250);
 const MUTED: Color32 = Color32::from_rgb(166, 162, 184);
 const ACCENT: Color32 = Color32::from_rgb(124, 108, 242);
+const UPDATE_TEXT: Color32 = Color32::from_rgb(190, 166, 255);
 const BACKGROUND: Color32 = Color32::from_rgb(28, 25, 34);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -896,7 +897,7 @@ impl Launcher {
 
         // Equal padding (13.0px) on both top and bottom
         let pad = 13.0_f32;
-        let card_h = if has_upd { icon_size + 89.0_f32 } else { icon_size + 62.0_f32 };
+        let card_h = icon_size + 62.0_f32;
         let card_rect = Rect::from_min_size(pos2(cell.left(), cell.top()), vec2(cell.width(), card_h));
         let hovered = ui.rect_contains_pointer(card_rect);
 
@@ -933,7 +934,7 @@ impl Launcher {
             let dot = icon_rect.right_top() + vec2(-4.0_f32, 6.0_f32);
             let dot_radius = (7.0_f32 + (icon_size - 100.0_f32) * 0.015_f32).clamp(7.0_f32, 8.5_f32);
             ui.painter().circle_filled(dot, dot_radius, ACCENT);
-            ui.painter().circle_stroke(dot, dot_radius, Stroke::new(2.2_f32, Color32::from_rgb(18, 14, 32)));
+            ui.painter().circle_stroke(dot, dot_radius, Stroke::new(2.2_f32, Color32::WHITE));
         }
 
         let name_y = icon_rect.bottom() + 13.0_f32;
@@ -952,13 +953,20 @@ impl Launcher {
         } else {
             version.to_string()
         };
-        ui.painter().text(
-            pos2(card_rect.center().x, version_y),
-            Align2::CENTER_CENTER,
-            version_text,
-            egui::FontId::new(ver_font_size, FontFamily::Proportional),
-            if has_upd { ACCENT } else { MUTED },
-        );
+        let mut version_job = egui::text::LayoutJob::default();
+        let version_format = |color| egui::TextFormat {
+            font_id: egui::FontId::new(ver_font_size, FontFamily::Proportional),
+            color, ..Default::default()
+        };
+        version_job.append(&version_text, 0.0, version_format(if version.is_empty() { MUTED } else { TEXT }));
+        if has_upd && !version.is_empty() {
+            if let Some(remote) = self.remote.get(id) {
+                version_job.append(" -> ", 0.0, version_format(TEXT));
+                version_job.append(&remote.tag, 0.0, version_format(UPDATE_TEXT));
+            }
+        }
+        let version_galley = ui.painter().layout_job(version_job);
+        ui.painter().galley(pos2(card_rect.center().x, version_y) - version_galley.size() * 0.5, version_galley, TEXT);
 
         if response.clicked() {
             self.selected = if self.selected == Some(index) { None } else { Some(index) };
@@ -968,32 +976,6 @@ impl Launcher {
         }
         response.on_hover_cursor(CursorIcon::PointingHand);
 
-        if has_upd {
-            let chip_y = version_y + 22.0_f32;
-            let chip = Rect::from_center_size(
-                pos2(card_rect.center().x, chip_y),
-                vec2(76.0_f32, 22.0_f32),
-            );
-            let chip_response = ui.interact(chip, Id::new(("upd", id)), Sense::click());
-            let fill = if chip_response.hovered() {
-                ACCENT
-            } else {
-                Color32::from_rgba_unmultiplied(124, 108, 242, 210)
-            };
-            ui.painter().rect_filled(chip, 11.0_f32, fill);
-            ui.painter().text(
-                chip.center(),
-                Align2::CENTER_CENTER,
-                "Update",
-                egui::FontId::new(12.0_f32, FontFamily::Proportional),
-                Color32::WHITE,
-            );
-            if chip_response.clicked() && self.busy.is_none() {
-                self.selected = Some(index);
-                self.start_one(id);
-            }
-            chip_response.on_hover_cursor(CursorIcon::PointingHand);
-        }
     }
 
     fn app_details(&mut self, ui: &mut egui::Ui) -> bool {
@@ -1035,7 +1017,13 @@ impl Launcher {
                 }
                 ui.add_space(12.0_f32);
                 ui.vertical(|ui| {
-                    ui.add(Label::new(RichText::new(&name).size(24.0_f32).strong().color(TEXT)).selectable(false));
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        ui.add(Label::new(RichText::new(&name).size(24.0_f32).strong().color(TEXT)).selectable(false));
+                        if !installed.is_empty() {
+                            ui.label(RichText::new(&installed).size(14.0).color(Color32::from_rgb(196, 192, 208)));
+                        }
+                    });
                     ui.label(RichText::new(description).size(14.0_f32).color(MUTED));
                     ui.horizontal(|ui| {
                         let link_text = |label: &str| RichText::new(label).size(14.0_f32).color(Color32::from_rgb(186, 176, 255));
@@ -1046,15 +1034,12 @@ impl Launcher {
                 });
             });
             ui.add_space(14.0_f32);
-            let installed_text = if installed.is_empty() {
-                "Not installed".to_string()
-            } else {
-                format!("Installed {installed}")
-            };
-            ui.label(RichText::new(installed_text).size(15.0_f32).color(MUTED));
+            if installed.is_empty() {
+                ui.label(RichText::new("Not installed").size(15.0_f32).color(MUTED));
+            }
             if let Some(remote) = &remote {
                 if remote.tag != installed {
-                    ui.label(RichText::new(format!("{} available", remote.tag)).size(15.0_f32).color(ACCENT));
+                    ui.label(RichText::new(format!("{} available", remote.tag)).size(15.0_f32).color(UPDATE_TEXT));
                 }
             }
             ui.add_space(12.0_f32);
@@ -1227,14 +1212,15 @@ fn patch_section(ui: &mut egui::Ui, when: &str, title: &str, subtitle: &str, bod
     ui.add_space(8.0_f32);
     let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0_f32), Sense::hover());
     let chip = if accent { ACCENT } else { Color32::from_white_alpha(16) };
-    let chip_text = if accent { Color32::WHITE } else { MUTED };
+    let chip_text = TEXT;
     let label = if title.is_empty() { when.to_string() } else { title.to_string() };
     ui.painter().text(pos2(bar.left(), bar.center().y), Align2::LEFT_CENTER, label, egui::FontId::new(15.5_f32, FontFamily::Proportional), TEXT);
     if !when.is_empty() && !title.is_empty() {
-        let when_w = 108.0_f32;
+        let when = when.split_whitespace().filter(|part| !part.contains(':')).collect::<Vec<_>>().join(" ");
+        let when_w = 116.0_f32;
         let when_rect = Rect::from_min_size(pos2(bar.right() - when_w, bar.center().y - 11.0_f32), vec2(when_w, 22.0_f32));
         ui.painter().rect_filled(when_rect, 11.0_f32, chip);
-        ui.painter().text(when_rect.center(), Align2::CENTER_CENTER, when, egui::FontId::new(11.5_f32, FontFamily::Proportional), chip_text);
+        ui.painter().text(when_rect.center(), Align2::CENTER_CENTER, when, egui::FontId::new(13.0_f32, FontFamily::Proportional), chip_text);
     }
     if !subtitle.is_empty() {
         ui.label(RichText::new(subtitle).size(13.0_f32).color(MUTED));

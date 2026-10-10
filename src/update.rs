@@ -563,7 +563,7 @@ fn push_log(root: &Path, id: &str, title: &str, body: &str) -> Result<LogEntry> 
 }
 
 fn log_entry(title: &str, body: &str) -> LogEntry {
-    let at = chrono::Local::now().format("%d %b %H:%M").to_string();
+    let at = chrono::Local::now().format("%d %b %Y").to_string();
     LogEntry {
         at,
         title: title.to_string(),
