@@ -1,5 +1,7 @@
 # CraftLauncher
 
+Current version: **v0.1.2**.
+
 **Your ArtCraft apps, together in one place.**
 
 A native Windows launcher for opening, downloading, and updating the ArtCraft creative apps. Choose an app, get its latest portable build, and start creating.
@@ -55,7 +57,8 @@ Each app popup shows a short description below its name, followed by **GitHub**,
 - Visit each app's source, releases, and website directly from its popup.
 - Hide the launcher in the system tray while downloads and updates continue.
 - Reopen the existing window when launching again, with one tray icon per Windows session.
-- Enjoy a compact interface with acrylic glass and rounded corners.
+- Enjoy a compact dark interface with rounded corners.
+- Read actionable error messages when opening apps, checking releases, or installing updates fails.
 
 ## Where files are stored
 
@@ -94,7 +97,7 @@ Uninstall removes the selected app folder, including any portable settings or pr
 
 App updates come from each app's GitHub releases. To update CraftLauncher itself, download the new `CraftLauncher.exe`, right-click its tray icon and choose **Exit**, then replace the old executable. Clicking **×** only hides the launcher. Your installed apps and update history are kept.
 
-See [CraftLauncher v0.1.1 release notes](RELEASE_NOTES.md) for the latest changes.
+See [CraftLauncher v0.1.2 release notes](RELEASE_NOTES.md) for the latest changes.
 
 ## Special thanks
 

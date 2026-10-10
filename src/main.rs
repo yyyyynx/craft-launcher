@@ -35,7 +35,7 @@ enum Event {
     Status(String),
     Remote { id: String, info: RemoteInfo },
     ReloadLog(String),
-    CheckDone,
+    CheckDone(Vec<String>),
     Idle { status: Option<String> },
     Failed(String),
 }
@@ -60,6 +60,7 @@ struct Launcher {
     logs: HashMap<String, Vec<LogEntry>>,
     recent: Vec<String>,
     status: String,
+    error: Option<String>,
     busy: Option<String>,
     checking: bool,
     logo: TextureHandle,
@@ -96,6 +97,7 @@ impl Launcher {
             selected: None,
             remote: HashMap::new(),
             status: "Checking for updates...".into(),
+            error: None,
             busy: None,
             checking: true,
             logo: load_logo(&cc.egui_ctx),
@@ -121,13 +123,15 @@ impl Launcher {
                     self.installed = update::installed_versions(&self.root).into_iter().collect();
                     self.recent = update::load_recent(&self.root);
                 }
-                Event::CheckDone => {
+                Event::CheckDone(errors) => {
                     self.checking = false;
-                    if self.busy.is_none() {
+                    if !errors.is_empty() {
+                        self.report_error(format!("Couldn't check updates for {}. Check your connection and try Check for updates again.", errors.join(", ")));
+                    } else if self.busy.is_none() {
                         self.status = self.ready_status();
                     }
                 }
-                Event::Failed(error) => self.status = error,
+                Event::Failed(error) => self.report_error(error),
                 Event::Idle { status } => {
                     self.busy = None;
                     self.installed = update::installed_versions(&self.root).into_iter().collect();
@@ -246,21 +250,28 @@ impl Launcher {
             let status = if errors.is_empty() {
                 "All apps updated".into()
             } else {
+                let _ = tx.send(Event::Failed(errors.join("\n")));
                 errors.join(" · ")
             };
             let _ = tx.send(Event::Idle { status: Some(status) });
         });
     }
 
-    fn open_index(&mut self, index: usize) {
+    fn report_error(&mut self, error: String) {
+        self.status = error.clone();
+        self.error = Some(error);
+    }
+
+    fn open_index(&mut self, index: usize) -> bool {
         let id = APPS[index].id;
         let name = APPS[index].name;
         match update::open_app(&self.root, id) {
             Ok(()) => {
                 self.recent = update::remember_recent(&self.root, id);
                 self.status = format!("Opened {name}");
+                true
             }
-            Err(error) => self.status = error,
+            Err(error) => { self.report_error(error); false }
         }
     }
 
@@ -293,6 +304,7 @@ impl Launcher {
                     UninstallTarget::All => format!("Uninstalled {removed} apps"),
                 }
             } else {
+                let _ = tx.send(Event::Failed(errors.join("\n")));
                 format!("Uninstalled {removed} apps · {}", errors.join(" · "))
             };
             let _ = tx.send(Event::Idle { status: Some(status) });
@@ -349,15 +361,19 @@ fn spawn_check(tx: Sender<Event>) {
         for app in APPS {
             let tx = tx.clone();
             handles.push(thread::spawn(move || {
-                if let Ok(info) = update::fetch_remote(app.id) {
-                    let _ = tx.send(Event::Remote { id: app.id.to_string(), info });
+                match update::fetch_remote(app.id) {
+                    Ok(info) => {
+                        let _ = tx.send(Event::Remote { id: app.id.to_string(), info });
+                        None
+                    }
+                    Err(_) => Some(app.name.to_string()),
                 }
             }));
         }
-        for handle in handles {
-            let _ = handle.join();
-        }
-        let _ = tx.send(Event::CheckDone);
+        let errors = handles.into_iter().filter_map(|handle| {
+            handle.join().unwrap_or_else(|_| Some("an app".into()))
+        }).collect();
+        let _ = tx.send(Event::CheckDone(errors));
     });
 }
 
@@ -461,6 +477,21 @@ impl eframe::App for Launcher {
             }
         }
         self.uninstall_confirmation(ctx);
+        if let Some(error) = self.error.clone() {
+            let response = egui::Modal::new(Id::new("operation-error"))
+                .frame(egui::Frame::popup(&ctx.style()).inner_margin(24.0).corner_radius(16.0))
+                .show(ctx, |ui| {
+                    ui.set_width(460.0);
+                    ui.label(RichText::new("Something went wrong").size(20.0).color(TEXT));
+                    ui.add_space(12.0);
+                    ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+                        ui.label(RichText::new(&error).color(TEXT));
+                    });
+                    ui.add_space(16.0);
+                    ui.add(ghost_button("Close")).clicked()
+                });
+            if response.inner || response.should_close() { self.error = None; }
+        }
     }
 }
 
@@ -652,8 +683,8 @@ impl Launcher {
         ui.painter().text(
             pos2(logo_rect.right() + 10.0_f32, rect.center().y),
             Align2::LEFT_CENTER,
-            "CraftLauncher",
-            egui::FontId::new(20.5_f32, FontFamily::Proportional),
+            concat!("CraftLauncher v", env!("CARGO_PKG_VERSION")),
+            egui::FontId::new(16.5_f32, FontFamily::Proportional),
             TEXT,
         );
     }
@@ -1053,8 +1084,7 @@ impl Launcher {
             let can_manage = !busy && update::is_installed(&self.root, &id);
             let open_rect = button_rect(0);
             if placed_button(ui, open_rect, can_manage, detail_button("Open", Color32::from_white_alpha(18))).clicked() {
-                self.open_index(index);
-                self.selected = None;
+                if self.open_index(index) { self.selected = None; }
             }
             let update_rect = button_rect(1);
             let installed_on_disk = update::is_installed(&self.root, &id);
@@ -1711,22 +1741,57 @@ mod ui_tests {
         }
     }
 
-    #[test]
-    fn install_button_click_works_without_update_check_results() {
+    fn test_launcher() -> (egui::Context, Launcher) {
         let ctx = egui::Context::default();
         apply_style(&ctx);
         let (tx, rx) = mpsc::channel();
-        let mut launcher = Launcher {
+        let launcher = Launcher {
             #[cfg(windows)]
             tray: None,
             root: std::env::temp_dir().join(format!("craft-ui-test-{}", std::process::id())),
             icons: HashMap::new(), uninstalled_icons: HashMap::new(), search: String::new(), filter: Filter::All,
             selected: Some(0), installed: HashMap::new(), remote: HashMap::new(), logs: HashMap::new(),
-            recent: Vec::new(), status: String::new(), busy: None, checking: false,
+            recent: Vec::new(), status: String::new(), error: None, busy: None, checking: false,
             logo: load_logo(&ctx), glass_hwnd: None, glass_maximized: None, patch_app: None,
             window_shape: None,
             uninstall_target: None, tx, rx,
         };
+        (ctx, launcher)
+    }
+
+    #[test]
+    fn failed_check_is_reported_instead_of_up_to_date() {
+        let (_, mut launcher) = test_launcher();
+        launcher.checking = true;
+        launcher.tx.send(Event::CheckDone(vec!["PhotoCraft".into()])).unwrap();
+        launcher.poll();
+        assert!(!launcher.checking);
+        assert!(launcher.error.as_deref().unwrap().contains("PhotoCraft"));
+        assert!(!launcher.status.contains("up to date"));
+    }
+
+    #[test]
+    fn failed_launch_keeps_app_details_and_shows_error() {
+        let (_, mut launcher) = test_launcher();
+        assert!(!launcher.open_index(0));
+        assert_eq!(launcher.selected, Some(0));
+        assert!(launcher.error.as_deref().unwrap().contains("Install"));
+    }
+
+    #[test]
+    fn worker_failure_survives_idle_event() {
+        let (_, mut launcher) = test_launcher();
+        launcher.busy = Some("photocraft".into());
+        launcher.tx.send(Event::Failed("Download failed".into())).unwrap();
+        launcher.tx.send(Event::Idle { status: None }).unwrap();
+        launcher.poll();
+        assert!(launcher.busy.is_none());
+        assert_eq!(launcher.error.as_deref(), Some("Download failed"));
+    }
+
+    #[test]
+    fn install_button_click_works_without_update_check_results() {
+        let (ctx, mut launcher) = test_launcher();
         let mut render = |events: Vec<egui::Event>| {
             let input = egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1220.0, 780.0))),

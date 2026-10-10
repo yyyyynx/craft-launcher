@@ -183,7 +183,7 @@ pub fn update_app(root: &Path, id: &str, on_status: &mut dyn FnMut(String)) -> R
         Ok(None) => {}
         Err(error) => {
             let _ = push_log(root, app.id, "App update failed", &error);
-            return Err(error);
+            return Err(format!("Couldn't install or update {}. Check your connection and free disk space, close the app, then try again. Details: {error}", app.name));
         }
     }
 
@@ -199,13 +199,13 @@ pub fn update_app(root: &Path, id: &str, on_status: &mut dyn FnMut(String)) -> R
 pub fn open_app(root: &Path, id: &str) -> Result<()> {
     let exe = exe_path(root, id);
     if !exe.is_file() {
-        return Err("Not installed. Update to download the app.".into());
+        return Err("App executable is missing. Click Install to download it again.".into());
     }
     let dir = exe.parent().unwrap_or(root).to_path_buf();
     Command::new(&exe)
         .current_dir(dir)
         .spawn()
-        .map_err(|error| format!("Couldn't open the app: {error}"))?;
+        .map_err(|error| format!("Couldn't open the app. Check that its files are still present and Windows has permission to run it. Details: {error}"))?;
     Ok(())
 }
 

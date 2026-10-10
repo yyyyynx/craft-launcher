@@ -1,6 +1,6 @@
 [package]
 name = "artcraft-launcher"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2024"
 description = "Launcher for the ArtCraft apps"
 

@@ -1,3 +1,19 @@
+# CraftLauncher v0.1.2
+
+## Stability update
+
+- Improved error reporting for app launches, downloads, and update checks. Errors now appear in a readable dialog with suggested next steps.
+- Keep the app popup open when launching an app fails.
+- Show the launcher version in the header and in Windows executable properties.
+- Retain native window controls: close hides to tray, minimize uses the taskbar, and maximize toggles the window size.
+- Use a uniform dark background and rounded native corners.
+- Show updates with a purple dot outlined in white and brighter version text. App versions appear beside product names in the popup.
+- Display clearer log dates without the time. New entries include the year; older entries keep the date information originally recorded.
+
+Download **CraftLauncher.exe** from the release assets. Choose **Exit** from the tray menu before replacing the previous executable. Installed apps and update history are kept.
+
+---
+
 # CraftLauncher v0.1.1
 
 System tray support, cleaner app popups, and a fix for duplicate launcher instances.

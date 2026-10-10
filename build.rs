@@ -34,7 +34,33 @@ fn main() {
     IcoEncoder::new(fs::File::create(&icon).expect("Icon file"))
         .encode_images(&frames).expect("Encode Windows icon");
     let resource = out.join("launcher.rc");
-    fs::write(&resource, format!("1 ICON \"{}\"\n", icon.display().to_string().replace('\\', "/")))
+    let version = env::var("CARGO_PKG_VERSION").expect("Package version");
+    let numbers = version.split('.').collect::<Vec<_>>().join(",");
+    let version_info = format!(r#"
+1 VERSIONINFO
+FILEVERSION {numbers},0
+PRODUCTVERSION {numbers},0
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "FileDescription", "CraftLauncher"
+      VALUE "FileVersion", "{version}"
+      VALUE "ProductName", "CraftLauncher"
+      VALUE "ProductVersion", "{version}"
+      VALUE "OriginalFilename", "CraftLauncher.exe"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 1200
+  END
+END
+"#);
+    fs::write(&resource, format!("1 ICON \"{}\"\n{version_info}", icon.display().to_string().replace('\\', "/")))
         .expect("Icon resource source");
 
     let sdk = env::var_os("WindowsSdkDir").map(PathBuf::from).unwrap_or_else(|| {
