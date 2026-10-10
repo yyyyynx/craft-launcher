@@ -1,6 +1,9 @@
 #![cfg_attr(all(not(debug_assertions), not(test)), windows_subsystem = "windows")]
 
 mod update;
+mod transfer;
+mod settings;
+mod launcher_update;
 #[cfg(windows)]
 mod tray;
 #[cfg(windows)]
@@ -8,6 +11,7 @@ mod instance;
 
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::thread;
 use std::time::Duration;
 
@@ -39,7 +43,14 @@ enum Event {
     CheckDone(Vec<String>),
     Idle { status: Option<String> },
     Failed(String),
+    Progress(transfer::Progress),
+    LauncherChecked(Result<Option<launcher_update::Release>, String>),
+    LauncherReady(std::path::PathBuf),
+    Usage { id: String, size: Result<u64, String> },
 }
+
+#[derive(Clone)]
+enum DownloadJob { App { id: String, repair: bool }, All, Launcher(launcher_update::Release) }
 
 #[derive(Clone, Copy)]
 enum UninstallTarget {
@@ -65,6 +76,18 @@ struct Launcher {
     error: Option<String>,
     busy: Option<String>,
     checking: bool,
+    settings: settings::Settings,
+    settings_open: bool,
+    cancel: Arc<AtomicBool>,
+    progress: Option<transfer::Progress>,
+    retry: Option<DownloadJob>,
+    launcher_release: Option<launcher_update::Release>,
+    launcher_checking: bool,
+    launcher_status: String,
+    launcher_ready: Option<std::path::PathBuf>,
+    usage: HashMap<String, Result<u64, String>>,
+    usage_selected: Option<usize>,
+    delete_portable_data: bool,
     logo: TextureHandle,
     glass_hwnd: Option<isize>,
     glass_maximized: Option<bool>,
@@ -79,9 +102,17 @@ impl Launcher {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         apply_style(&cc.egui_ctx);
         let root = update::artcraft_root();
+        let recovery_error = update::recover_interrupted_installs(&root).err();
+        let update_error_file = root.join("last-launcher-update-error.txt");
+        let previous_update_error = std::fs::read_to_string(&update_error_file).ok();
+        if previous_update_error.is_some() { let _ = std::fs::remove_file(&update_error_file); }
         update::ensure_baseline(&root);
         let (tx, rx) = mpsc::channel();
-        spawn_check(tx.clone());
+        let settings = settings::Settings::load(&root);
+        if settings.check_on_startup { spawn_check(tx.clone()); }
+        if settings.check_launcher_on_startup { spawn_launcher_check(tx.clone(), settings.beta_updates); }
+        let checking = settings.check_on_startup;
+        let launcher_checking = settings.check_launcher_on_startup;
         Self {
             #[cfg(windows)]
             tray: match tray::SystemTray::new(&cc.egui_ctx) {
@@ -99,10 +130,22 @@ impl Launcher {
             filter: Filter::All,
             selected: None,
             remote: HashMap::new(),
-            status: "Checking for updates...".into(),
-            error: None,
+            status: if checking { "Checking for updates...".into() } else { "Ready".into() },
+            error: recovery_error.or(previous_update_error),
             busy: None,
-            checking: true,
+            checking,
+            settings,
+            settings_open: false,
+            cancel: Arc::new(AtomicBool::new(false)),
+            progress: None,
+            retry: None,
+            launcher_release: None,
+            launcher_checking,
+            launcher_status: String::new(),
+            launcher_ready: None,
+            usage: HashMap::new(),
+            usage_selected: None,
+            delete_portable_data: false,
             logo: load_logo(&cc.egui_ctx),
             glass_hwnd: None,
             glass_maximized: None,
@@ -134,11 +177,28 @@ impl Launcher {
                         self.status = self.ready_status();
                     }
                 }
-                Event::Failed(error) => self.report_error(error),
+                Event::Failed(error) => if error == transfer::CANCELLED { self.status = "Cancelled. Existing apps were kept.".into(); } else { self.report_error(error); },
+                Event::Progress(progress) => self.progress = Some(progress),
+                Event::LauncherChecked(result) => {
+                    self.launcher_checking = false;
+                    match result {
+                        Ok(release) => {
+                            self.launcher_status = if release.is_some() { "A new launcher version is available".into() } else { "Launcher is up to date".into() };
+                            self.launcher_release = release;
+                        }
+                        Err(error) => { self.launcher_status = format!("Couldn't check launcher updates: {error}"); }
+                    }
+                }
+                Event::LauncherReady(path) => { self.launcher_ready = Some(path); self.settings_open = true; }
+                Event::Usage { id, size } => { self.usage.insert(id, size); }
                 Event::Idle { status } => {
                     self.busy = None;
+                    self.progress = None;
+                    self.usage.clear();
+                    self.usage_selected = None;
                     self.installed = update::installed_versions(&self.root).into_iter().collect();
                     if let Some(status) = status {
+                        self.retry = None;
                         self.status = status;
                     }
                 }
@@ -218,63 +278,61 @@ impl Launcher {
     }
 
     fn start_one(&mut self, id: &str) {
-        if self.busy.is_some() {
-            return;
-        }
-        self.busy = Some(id.to_string());
-        let name = APPS.iter().find(|app| app.id == id).map(|app| app.name).unwrap_or(id);
-        self.status = format!("Installing or updating {name}...");
-        let root = self.root.clone();
-        let id = id.to_string();
-        let tx = self.tx.clone();
-        thread::spawn(move || {
-            let result = update::update_app(&root, &id, &mut |message| {
-                let _ = tx.send(Event::Status(message));
-            });
-            let _ = tx.send(Event::ReloadLog(id));
-            finish(&tx, result);
-        });
+        self.start_download(DownloadJob::App { id: id.to_string(), repair: false });
     }
 
     fn start_check(&mut self) {
-        if self.busy.is_some() || self.checking {
-            return;
-        }
+        if self.busy.is_some() || self.checking { return; }
         self.checking = true;
         self.status = "Checking for updates...".into();
         spawn_check(self.tx.clone());
     }
 
-    fn start_all(&mut self) {
-        if self.busy.is_some() {
-            return;
-        }
-        self.busy = Some("*".into());
+    fn start_all(&mut self) { self.start_download(DownloadJob::All); }
+
+    fn start_download(&mut self, job: DownloadJob) {
+        if self.busy.is_some() { return; }
+        self.busy = Some(match &job {
+            DownloadJob::App { id, .. } => id.clone(),
+            DownloadJob::All => "*".into(),
+            DownloadJob::Launcher(_) => "launcher".into(),
+        });
+        self.error = None;
+        self.retry = Some(job.clone());
+        self.cancel = Arc::new(AtomicBool::new(false));
+        self.progress = None;
+        self.status = "Preparing download...".into();
         let root = self.root.clone();
+        let cancel = self.cancel.clone();
         let tx = self.tx.clone();
         thread::spawn(move || {
-            let mut errors = Vec::new();
-            for app in APPS {
-                match update::update_app(&root, app.id, &mut |message| {
-                    let _ = tx.send(Event::Status(message));
-                }) {
-                    Ok(outcome) => {
-                        let _ = tx.send(Event::Status(outcome.status));
+            let mut status = |message| { let _ = tx.send(Event::Status(message)); };
+            let mut progress = |value| { let _ = tx.send(Event::Progress(value)); };
+            let result = match job {
+                DownloadJob::App { id, repair } => update::update_app(&root, &id, repair, &cancel, &mut status, &mut progress),
+                DownloadJob::All => {
+                    let mut errors = Vec::new();
+                    for (index, app) in APPS.iter().enumerate() {
+                        if transfer::check(&cancel).is_err() { errors.clear(); errors.push(transfer::CANCELLED.into()); break; }
+                        status(format!("App {} of {}: {}", index + 1, APPS.len(), app.name));
+                        if let Err(error) = update::update_app(&root, app.id, false, &cancel, &mut status, &mut progress) {
+                            if error == transfer::CANCELLED { errors.clear(); errors.push(error); break; }
+                            errors.push(error);
+                        }
+                        let _ = tx.send(Event::ReloadLog(app.id.into()));
                     }
-                    Err(error) => errors.push(format!("{}: {error}", app.name)),
+                    if errors.is_empty() { Ok(update::UpdateOutcome { status: "All apps updated".into() }) }
+                    else { Err(errors.join("\n")) }
                 }
-                let _ = tx.send(Event::ReloadLog(app.id.to_string()));
-            }
-            let status = if errors.is_empty() {
-                "All apps updated".into()
-            } else {
-                let _ = tx.send(Event::Failed(errors.join("\n")));
-                errors.join(" · ")
+                DownloadJob::Launcher(release) => launcher_update::prepare(&root, &release, &cancel, &mut progress).map(|path| {
+                    let _ = tx.send(Event::LauncherReady(path));
+                    update::UpdateOutcome { status: "Launcher update ready. Open Settings to restart and update.".into() }
+                }),
             };
-            let _ = tx.send(Event::Idle { status: Some(status) });
+            for app in APPS { let _ = tx.send(Event::ReloadLog(app.id.into())); }
+            finish(&tx, result);
         });
     }
-
     fn report_error(&mut self, error: String) {
         self.status = error.clone();
         self.error = Some(error);
@@ -298,9 +356,12 @@ impl Launcher {
             return;
         }
         self.busy = Some("uninstall".into());
+        self.retry = None;
+        self.progress = None;
         self.status = "Uninstalling...".into();
         let root = self.root.clone();
         let tx = self.tx.clone();
+        let delete_data = self.delete_portable_data;
         thread::spawn(move || {
             let apps: Vec<&CraftApp> = match target {
                 UninstallTarget::App(index) => vec![&APPS[index]],
@@ -310,7 +371,7 @@ impl Launcher {
             let mut removed = 0;
             for app in apps {
                 let _ = tx.send(Event::Status(format!("Uninstalling {}...", app.name)));
-                match update::uninstall_app(&root, app.id) {
+                match update::uninstall_app_with_data(&root, app.id, delete_data) {
                     Ok(_) => removed += 1,
                     Err(error) => errors.push(format!("{}: {error}", app.name)),
                 }
@@ -343,7 +404,9 @@ impl Launcher {
             };
             ui.heading(title);
             ui.add_space(12.0_f32);
-            ui.label("This removes the app files and any settings or projects saved inside their portable folders. This cannot be undone.");
+            ui.label("Remove the app files. Portable settings and projects are kept unless you choose to delete them below.");
+            ui.checkbox(&mut self.delete_portable_data, "Delete portable settings and projects too");
+            if self.delete_portable_data { ui.label(RichText::new("Deleting portable data cannot be undone.").color(Color32::from_rgb(255, 170, 170))); }
             ui.add_space(8.0_f32);
             ui.label("Files saved elsewhere and your update history will be kept. Close the apps before uninstalling.");
             ui.add_space(16.0_f32);
@@ -395,6 +458,10 @@ fn spawn_check(tx: Sender<Event>) {
     });
 }
 
+fn spawn_launcher_check(tx: Sender<Event>, include_beta: bool) {
+    thread::spawn(move || { let _ = tx.send(Event::LauncherChecked(launcher_update::check(include_beta))); });
+}
+
 fn main() -> eframe::Result<()> {
     #[cfg(windows)]
     let _instance = match instance::SingleInstance::acquire()
@@ -427,15 +494,24 @@ impl eframe::App for Launcher {
         #[cfg(windows)]
         if ctx.input(|i| i.viewport().close_requested()) {
             if let Some(tray) = &self.tray {
-                if !tray.exiting() {
+                if !tray.exiting() && self.settings.close_to_tray {
                     ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                     tray.hide();
                 }
             }
         }
         self.poll();
+        if let Some(index) = self.selected {
+            if self.usage_selected != Some(index) {
+                self.usage_selected = Some(index);
+                let id = APPS[index].id.to_string();
+                let root = self.root.clone();
+                let tx = self.tx.clone();
+                thread::spawn(move || { let _ = tx.send(Event::Usage { size: update::app_disk_usage(&root, &id), id }); });
+            }
+        }
         self.apply_glass(ctx);
-        if self.busy.is_some() || self.checking {
+        if self.busy.is_some() || self.checking || self.launcher_checking || self.selected.is_some() {
             ctx.request_repaint_after(Duration::from_millis(80));
         }
 
@@ -495,6 +571,8 @@ impl eframe::App for Launcher {
             }
         }
         self.uninstall_confirmation(ctx);
+        self.download_panel(ctx);
+        self.settings_panel(ctx);
         if let Some(error) = self.error.clone() {
             let response = egui::Modal::new(Id::new("operation-error"))
                 .frame(egui::Frame::popup(&ctx.style()).inner_margin(24.0).corner_radius(16.0))
@@ -506,9 +584,14 @@ impl eframe::App for Launcher {
                         ui.label(RichText::new(&error).color(TEXT));
                     });
                     ui.add_space(16.0);
-                    ui.add(ghost_button("Close")).clicked()
+                    ui.horizontal(|ui| {
+                        let close = ui.add(ghost_button("Close")).clicked();
+                        let retry = self.retry.is_some() && self.busy.is_none() && ui.add(ghost_button("Retry")).clicked();
+                        (close, retry)
+                    }).inner
                 });
-            if response.inner || response.should_close() { self.error = None; }
+            if response.inner.0 || response.inner.1 || response.should_close() { self.error = None; }
+            if response.inner.1 { if let Some(job) = self.retry.clone() { self.start_download(job); } }
         }
     }
 }
@@ -543,7 +626,7 @@ fn layout(full: Rect) -> Places {
     let update_all = Rect::from_min_max(pos2(side.min.x, side.max.y - 42.0_f32), side.max);
     let nav = Rect::from_min_max(
         pos2(side.min.x, sidebar_header.max.y + 12.0_f32),
-        pos2(side.max.x, update_all.min.y - 56.0_f32),
+        pos2(side.max.x, update_all.min.y - 100.0_f32),
     );
 
     // Main area starts after divider
@@ -682,6 +765,84 @@ impl Launcher {
         }
     }
 
+    fn download_panel(&mut self, ctx: &egui::Context) {
+        if self.retry.is_none() || (self.selected.is_some() && self.patch_app.is_none()) { return; }
+        egui::Window::new("Downloads").anchor(Align2::CENTER_BOTTOM, vec2(0.0, -44.0))
+            .resizable(false).collapsible(false).default_width(420.0).show(ctx, |ui| self.download_controls(ui));
+    }
+
+    fn download_controls(&mut self, ui: &mut egui::Ui) {
+        let mut retry = false;
+                ui.label(&self.status);
+                if let Some(p) = &self.progress {
+                    if let Some(total) = p.total.filter(|v| *v > 0) {
+                        ui.add(egui::ProgressBar::new((p.received as f64 / total as f64) as f32).show_percentage());
+                        ui.label(format!("{} / {}", transfer::size(p.received), transfer::size(total)));
+                    } else { ui.spinner(); ui.label(format!("{} downloaded", transfer::size(p.received))); }
+                }
+                if self.busy.is_some() {
+                    if ui.add_enabled(!self.cancel.load(Ordering::Relaxed) && !self.status.ends_with(": installing..."), Button::new("Cancel")).clicked() {
+                        self.cancel.store(true, Ordering::Relaxed);
+                    }
+                } else { retry = ui.button("Retry").clicked(); }
+        if retry { if let Some(job) = self.retry.clone() { self.start_download(job); } }
+    }
+
+    fn settings_panel(&mut self, ctx: &egui::Context) {
+        if !self.settings_open { return; }
+        let mut open = true;
+        let before = serde_json::to_string(&self.settings).unwrap_or_default();
+        let mut check = false;
+        let mut download = false;
+        let mut restart = false;
+        let mut folder = false;
+        egui::Window::new("Settings").open(&mut open).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .default_width(480.0).resizable(false).movable(false).collapsible(false)
+            .frame(egui::Frame::window(&ctx.style()).inner_margin(22.0).corner_radius(14.0))
+            .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing.y = 10.0;
+                ui.spacing_mut().button_padding = vec2(12.0, 8.0);
+                ui.checkbox(&mut self.settings.check_on_startup, "Check app updates on startup");
+                ui.checkbox(&mut self.settings.check_launcher_on_startup, "Check launcher updates on startup");
+                ui.checkbox(&mut self.settings.close_to_tray, "Close button hides to system tray");
+                ui.checkbox(&mut self.settings.beta_updates, "Include beta launcher releases");
+                let settings_button = |label: &str| Button::new(RichText::new(label.to_owned()).size(14.0)).min_size(vec2(0.0, 34.0)).corner_radius(8.0);
+                folder = ui.add(settings_button("Open launcher data folder")).clicked();
+                ui.separator();
+                ui.heading(format!("CraftLauncher v{}", env!("CARGO_PKG_VERSION")));
+                ui.label(&self.launcher_status);
+                check = ui.add_enabled(!self.launcher_checking, settings_button("Check launcher updates")).clicked();
+                if let Some(release) = &self.launcher_release {
+                    let size = if release.size > 0 { transfer::size(release.size) } else { "Size available during download".into() };
+                    ui.label(RichText::new(format!("v{} available · {size}", release.version.trim_start_matches('v'))).color(UPDATE_TEXT));
+                    ui.hyperlink_to("View release on GitHub", format!("https://github.com/yyyyynx/craft-launcher/releases/tag/{}", release.version));
+                    ScrollArea::vertical().max_height(180.0).show(ui, |ui| { ui.label(&release.notes); });
+                    download = ui.add_enabled(self.busy.is_none(), settings_button("Download launcher update")).clicked();
+                }
+                if self.launcher_ready.is_some() {
+                    ui.label("Update verified and ready. Your installed apps will be kept.");
+                    restart = ui.add_enabled(self.busy.is_none(), settings_button("Restart and update")).clicked();
+                }
+            });
+        self.settings_open = open;
+        if before != serde_json::to_string(&self.settings).unwrap_or_default() {
+            if let Err(e) = self.settings.save(&self.root) { self.report_error(e); }
+        }
+        if folder { if let Err(e) = update::open_folder(&self.root) { self.report_error(e); } }
+        if check { self.launcher_checking = true; self.launcher_status = "Checking...".into(); spawn_launcher_check(self.tx.clone(), self.settings.beta_updates); }
+        if download { if let Some(r) = self.launcher_release.clone() { self.start_download(DownloadJob::Launcher(r)); } }
+        if restart { if let Some(path) = &self.launcher_ready {
+            match launcher_update::restart_and_replace(path, &self.root) {
+                Ok(()) => {
+                    #[cfg(windows)]
+                    if let Some(tray) = &self.tray { tray.allow_exit(); }
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                Err(e) => self.report_error(e),
+            }
+        } }
+    }
+
     fn sidebar_header(&mut self, ui: &mut egui::Ui, rect: Rect, is_maximized: bool) {
         let response = ui.interact(rect, Id::new("sidebar-drag"), Sense::click_and_drag());
         if response.drag_started() {
@@ -733,9 +894,11 @@ impl Launcher {
         }
         if window_button(ui, "title-close", places.close, WindowBtn::Close) {
             #[cfg(windows)]
-            if let Some(tray) = &self.tray {
-                tray.hide();
-                return;
+            if self.settings.close_to_tray {
+                if let Some(tray) = &self.tray {
+                    tray.hide();
+                    return;
+                }
             }
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
@@ -863,6 +1026,9 @@ impl Launcher {
             pos2(update_all.right(), update_all.top() - 8.0_f32),
         );
         let can_uninstall = self.busy.is_none() && APPS.iter().any(|app| update::is_installed(&self.root, app.id));
+        let settings_rect = uninstall_rect.translate(vec2(0.0, -44.0));
+        let settings_label = if self.launcher_release.is_some() { "Settings · Launcher update" } else { "Settings" };
+        if ui.put(settings_rect, Button::new(settings_label).corner_radius(10.0)).clicked() { self.settings_open = true; }
         let response = placed_button(ui, uninstall_rect, can_uninstall, uninstall_button("Uninstall all"));
         if response.clicked() {
             self.uninstall_target = Some(UninstallTarget::All);
@@ -990,7 +1156,7 @@ impl Launcher {
         let favorite = self.favorites.iter().any(|favorite| favorite == id);
         let star_rect = Rect::from_center_size(icon_rect.left_top() + vec2(10.0, 10.0), vec2(28.0, 28.0));
         let star_response = ui.interact(star_rect, Id::new(("favorite", id)), Sense::click());
-        ui.painter().circle_filled(star_rect.center(), 14.0, Color32::from_rgb(38, 34, 48));
+        ui.painter().circle_filled(star_rect.center(), 11.0, Color32::from_rgb(38, 34, 48));
         paint_star(ui.painter(), star_rect.center(), if favorite { Color32::from_rgb(255, 215, 99) } else { TEXT }, favorite);
         if star_response.clicked() { self.toggle_favorite(id); }
         let star_hovered = star_response.hovered();
@@ -1127,6 +1293,17 @@ impl Launcher {
                 self.uninstall_target = Some(UninstallTarget::App(index));
             }
             ui.add_space(20.0_f32);
+            if self.retry.is_some() { self.download_controls(ui); ui.add_space(12.0); }
+            if can_manage {
+                if let Some(Ok(size)) = self.usage.get(&id) { ui.label(format!("Installed size: {}", transfer::size(*size))); }
+                ui.horizontal(|ui| {
+                    if ui.button("Open app folder").clicked() {
+                        if let Err(e) = update::open_folder(&update::app_folder(&self.root, &id)) { self.report_error(e); }
+                    }
+                    if ui.button("Repair / Reinstall").clicked() { self.start_download(DownloadJob::App { id: id.clone(), repair: true }); }
+                });
+                ui.add_space(8.0);
+            }
             let (log_rect, log_response) = ui.allocate_exact_size(vec2(ui.available_width(), 54.0_f32), Sense::click());
             let log_fill = if log_response.hovered() {
                 Color32::from_white_alpha(28)
@@ -1517,19 +1694,20 @@ fn paint_download(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
 }
 
 fn paint_star(painter: &egui::Painter, center: egui::Pos2, color: Color32, filled: bool) {
-    let points: Vec<_> = (0..10).map(|index| {
-        let angle = -std::f32::consts::FRAC_PI_2 + index as f32 * std::f32::consts::PI / 5.0;
-        let radius = if index % 2 == 0 { 9.0 } else { 4.2 };
-        center + vec2(angle.cos(), angle.sin()) * radius
-    }).collect();
-    if filled {
-        for index in 0..10 {
-            painter.add(egui::Shape::convex_polygon(vec![center, points[index], points[(index + 1) % 10]], color, Stroke::NONE));
-        }
-    }
-    painter.add(egui::Shape::closed_line(points, Stroke::new(1.4_f32, color)));
+    let id = Id::new(("lucide-favorite-texture", filled));
+    let ctx = painter.ctx();
+    let texture = ctx.data(|data| data.get_temp::<TextureHandle>(id)).unwrap_or_else(|| {
+        let bytes: &[u8] = if filled { include_bytes!("../assets/icons/favorite-filled.png") }
+            else { include_bytes!("../assets/icons/favorite-outline.png") };
+        let image = image::load_from_memory(bytes).expect("embedded favorite icon").into_rgba8();
+        let image = egui::ColorImage::from_rgba_unmultiplied([image.width() as usize, image.height() as usize], image.as_raw());
+        let texture = ctx.load_texture(format!("lucide-favorite-{filled}"), image, egui::TextureOptions::LINEAR);
+        ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+        texture
+    });
+    painter.image(texture.id(), Rect::from_center_size(center, vec2(16.0, 16.0)),
+        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), color);
 }
-
 fn paint_bolt(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
     let points = [
         vec2(1.4_f32, -7.4_f32),
@@ -1801,6 +1979,10 @@ mod ui_tests {
             logo: load_logo(&ctx), glass_hwnd: None, glass_maximized: None, patch_app: None,
             window_shape: None,
             uninstall_target: None, tx, rx,
+            settings: settings::Settings::default(), settings_open: false, cancel: Arc::new(AtomicBool::new(false)),
+            progress: None, retry: None, launcher_release: None, launcher_checking: false,
+            launcher_status: String::new(), launcher_ready: None, usage: HashMap::new(), usage_selected: None,
+            delete_portable_data: false,
         };
         (ctx, launcher)
     }
@@ -1910,5 +2092,23 @@ mod ui_tests {
             pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default(),
         }]);
         assert!(requested, "Clicking Install in the modal must request installation");
+    }
+
+    #[test]
+    fn cancel_download_is_clickable_inside_app_modal() {
+        let (ctx, mut launcher) = test_launcher();
+        launcher.busy = Some("photocraft".into());
+        launcher.retry = Some(DownloadJob::App { id: "photocraft".into(), repair: false });
+        launcher.progress = Some(transfer::Progress { received: 20, total: Some(100) });
+        launcher.status = "PhotoCraft: downloading...".into();
+        let mut render = |events| ctx.run(egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1220.0, 780.0))), events, ..Default::default()
+        }, |ctx| { egui::Modal::new(Id::new("app-details-popup")).frame(egui::Frame::NONE).show(ctx, |ui| launcher.app_details(ui)); });
+        for _ in 0..3 { render(Vec::new()); }
+        let output = render(Vec::new());
+        let pos = output.shapes.iter().find_map(|shape| text_rect(&shape.shape, "Cancel")).unwrap().center();
+        render(vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }]);
+        render(vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }]);
+        assert!(launcher.cancel.load(Ordering::Relaxed));
     }
 }

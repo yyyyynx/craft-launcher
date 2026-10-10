@@ -1,3 +1,19 @@
+# CraftLauncher v0.9.0 — Public beta
+
+- Download progress with percentages and file sizes, plus Cancel and Retry.
+- Direct portable downloads without waiting for source repositories.
+- Stage app updates before replacing the installed copy; restore previous files on failure and recover interrupted replacements on startup.
+- In-app launcher update checks, SHA-256 verification, and **Restart and update**.
+- Settings for startup checks, beta launcher releases, and close-to-tray behavior.
+- Installed app sizes, open-folder shortcuts, and Repair / Reinstall.
+- Keep user-created portable data during uninstall, with an explicit option to delete it.
+- Windows CI tests, executable builds, and checksum assets for GitHub releases.
+- Smaller favorite stars with rounded edges and a padded Settings window that stays centered without collapsing.
+
+This beta includes the planned download, launcher update, app management, and release tooling changes from v0.2.0 onward. Favorites remain available. Download **CraftLauncher.exe** once to upgrade from older versions; future published releases can be installed from Settings. Windows 10/11 x64; executable currently unsigned.
+
+---
+
 # CraftLauncher v0.2.0
 
 - Star apps directly from their cards. Selected stars turn gold; click again to remove them.

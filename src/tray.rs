@@ -63,6 +63,8 @@ impl SystemTray {
     pub fn exiting(&self) -> bool {
         self.exit_requested.load(Ordering::Relaxed)
     }
+
+    pub fn allow_exit(&self) { self.exit_requested.store(true, Ordering::Relaxed); }
 }
 
 fn restore(ctx: &Context, hwnd: isize) {

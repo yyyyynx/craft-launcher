@@ -2,6 +2,8 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::AtomicBool;
+use crate::transfer::{self, Progress};
 
 use serde::{Deserialize, Serialize};
 
@@ -174,28 +176,21 @@ pub struct UpdateOutcome {
     pub status: String,
 }
 
-pub fn update_app(root: &Path, id: &str, on_status: &mut dyn FnMut(String)) -> Result<UpdateOutcome> {
+pub fn update_app(root: &Path, id: &str, repair: bool, cancel: &AtomicBool, on_status: &mut dyn FnMut(String), progress: &mut dyn FnMut(Progress)) -> Result<UpdateOutcome> {
     let app = APPS.iter().find(|app| app.id == id).ok_or_else(|| format!("unknown app {id}"))?;
     let mut notes = Vec::new();
 
-    on_status(format!("{}: pulling source...", app.name));
-    match update_source(root, app) {
-        Ok(Some(entry)) => {
-            notes.push(entry.title.clone());
-            let _ = push_log(root, app.id, &entry.title, &entry.body);
-        }
-        Ok(None) => {}
-        Err(error) => notes.push(format!("source: {error}")),
-    }
-
+    transfer::check(cancel)?;
+    recover_interrupted_installs(root)?;
     on_status(format!("{}: checking the release...", app.name));
-    match update_binary(root, app, on_status) {
+    match update_binary_controlled(root, app, repair, cancel, on_status, progress) {
         Ok(Some(entry)) => {
             notes.push(entry.title.clone());
             let _ = push_log(root, app.id, &entry.title, &entry.body);
         }
         Ok(None) => {}
         Err(error) => {
+            if error == transfer::CANCELLED { return Err(error); }
             let _ = push_log(root, app.id, "App update failed", &error);
             return Err(format!("Couldn't install or update {}. Check your connection and free disk space, close the app, then try again. Details: {error}", app.name));
         }
@@ -248,7 +243,134 @@ fn check_uninstall_tree(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)] {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))] { let _ = metadata; false }
+}
+
+fn relative_files(root: &Path) -> Result<Vec<String>> {
+    fn collect(root: &Path, dir: &Path, files: &mut Vec<String>) -> Result<()> {
+        for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+            let path = entry.map_err(|e| e.to_string())?.path();
+            if path.is_dir() { collect(root, &path, files)?; }
+            else { files.push(path.strip_prefix(root).map_err(|e| e.to_string())?.to_string_lossy().replace('\\', "/")); }
+        }
+        Ok(())
+    }
+    let mut files = Vec::new();
+    collect(root, root, &mut files)?;
+    Ok(files)
+}
+
+fn commit_install(apps: &Path, id: &str, prepared: &Path, tag: &str, files: &[String], backup: &Path) -> Result<()> {
+    let dest = apps.join(id);
+    let version = apps.join(format!("{id}.version"));
+    let manifest = apps.join(format!("{id}.files.json"));
+    for path in [&version, &manifest] {
+        if path.exists() && (!path.is_file() || fs::symlink_metadata(path).map_err(|e| e.to_string())?.file_type().is_symlink() || is_reparse_point(&fs::symlink_metadata(path).map_err(|e| e.to_string())?)) {
+            return Err("Install metadata is not a regular file. Your existing app was kept.".into());
+        }
+    }
+    let parent = backup.parent().ok_or("Invalid staging folder")?;
+    let next_version = parent.join("next.version");
+    let next_manifest = parent.join("next.files.json");
+    fs::write(&next_version, tag).map_err(|e| e.to_string())?;
+    fs::write(&next_manifest, serde_json::to_vec(files).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let old_version = parent.join("old.version");
+    let old_manifest = parent.join("old.files.json");
+    let journal = parent.join("transaction.json");
+    let state = serde_json::json!({"id": id, "had_app": dest.exists(), "had_version": version.exists(), "had_manifest": manifest.exists(), "committed": false});
+    fs::write(&journal, state.to_string()).map_err(|e| e.to_string())?;
+    let mut moved_app = false;
+    let mut new_app = false;
+    let mut moved_version = false;
+    let mut moved_manifest = false;
+    let mut new_version = false;
+    let mut new_manifest = false;
+    let result = (|| -> std::io::Result<()> {
+        if dest.exists() { fs::rename(&dest, backup)?; moved_app = true; }
+        if version.exists() { fs::rename(&version, &old_version)?; moved_version = true; }
+        if manifest.exists() { fs::rename(&manifest, &old_manifest)?; moved_manifest = true; }
+        fs::rename(prepared, &dest)?; new_app = true;
+        fs::rename(&next_version, &version)?; new_version = true;
+        fs::rename(&next_manifest, &manifest)?; new_manifest = true;
+        let mut done = state.clone(); done["committed"] = true.into();
+        fs::write(&journal, done.to_string())?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let rollback = (|| -> std::io::Result<()> {
+            if new_manifest { fs::remove_file(&manifest)?; }
+            if new_version { fs::remove_file(&version)?; }
+            if moved_manifest { fs::rename(&old_manifest, &manifest)?; }
+            if moved_version { fs::rename(&old_version, &version)?; }
+            if new_app { fs::rename(&dest, prepared)?; }
+            if moved_app { fs::rename(backup, &dest)?; }
+            Ok(())
+        })();
+        return Err(match rollback { Ok(()) => { let _ = fs::remove_file(&journal); format!("Couldn't finish installation. Previous app restored: {error}") }, Err(restore) => format!("Installation failed: {error}. Recovery needed: {restore}") });
+    }
+    Ok(())
+}
+
+pub fn recover_interrupted_installs(root: &Path) -> Result<()> {
+    let apps = root.join("apps");
+    if !apps.exists() { return Ok(()); }
+    if is_reparse_point(&fs::symlink_metadata(&apps).map_err(|e| e.to_string())?) { return Err("App storage is a junction. Recovery stopped.".into()); }
+    for entry in fs::read_dir(&apps).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if !entry.file_name().to_string_lossy().starts_with(".craft-stage-") { continue; }
+        let stage = entry.path(); let journal = stage.join("transaction.json");
+        if !journal.is_file() { continue; }
+        check_uninstall_tree(&stage)?;
+        let state: serde_json::Value = serde_json::from_slice(&fs::read(&journal).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        if state["committed"] == true { continue; }
+        let id = state["id"].as_str().ok_or("Invalid install recovery record")?;
+        if !APPS.iter().any(|app| app.id == id) { return Err("Unknown app in recovery record".into()); }
+        let dest = apps.join(id); let backup = stage.join("previous");
+        if backup.exists() || state["had_app"] == false {
+            if dest.exists() { check_uninstall_tree(&dest)?; fs::rename(&dest, stage.join("interrupted-new-app")).map_err(|e| e.to_string())?; }
+            if backup.exists() { fs::rename(&backup, &dest).map_err(|e| e.to_string())?; }
+        }
+        for (suffix, old, field) in [("version", "old.version", "had_version"), ("files.json", "old.files.json", "had_manifest")] {
+            let path = apps.join(format!("{id}.{suffix}")); let previous = stage.join(old);
+            if previous.exists() || state[field] == false {
+                if path.exists() { check_uninstall_tree(&path)?; fs::remove_file(&path).map_err(|e| e.to_string())?; }
+                if previous.exists() { fs::rename(previous, path).map_err(|e| e.to_string())?; }
+            }
+        }
+        fs::remove_file(journal).map_err(|e| e.to_string())?;
+        let _ = push_log(root, id, "Interrupted update recovered", "Previous app restored. You can retry the update.");
+    }
+    Ok(())
+}
+
+pub fn app_folder(root: &Path, id: &str) -> PathBuf { root.join("apps").join(id) }
+
+pub fn app_disk_usage(root: &Path, id: &str) -> Result<u64> {
+    let dir = app_folder(root, id);
+    if !dir.exists() { return Ok(0); }
+    check_uninstall_tree(&dir)?;
+    relative_files(&dir)?.iter().try_fold(0_u64, |total, file| {
+        fs::metadata(dir.join(file)).map(|m| total.saturating_add(m.len())).map_err(|e| e.to_string())
+    })
+}
+
+pub fn open_folder(path: &Path) -> Result<()> {
+    if !path.is_dir() { return Err("Folder does not exist yet. Install the app first.".into()); }
+    command("explorer.exe").arg(path).spawn().map_err(|e| format!("Couldn't open folder: {e}"))?;
+    Ok(())
+}
+
+#[cfg(test)]
 pub fn uninstall_app(root: &Path, id: &str) -> Result<UpdateOutcome> {
+    uninstall_app_with_data(root, id, true)
+}
+
+pub fn uninstall_app_with_data(root: &Path, id: &str, delete_data: bool) -> Result<UpdateOutcome> {
     let app = APPS.iter().find(|app| app.id == id).ok_or_else(|| format!("Unknown app {id}"))?;
     if app_is_running(id)? {
         return Err(format!("{} is open. Close it, then uninstall.", app.name));
@@ -273,7 +395,20 @@ pub fn uninstall_app(root: &Path, id: &str) -> Result<UpdateOutcome> {
             check_uninstall_tree(&version)?;
         }
         if dir.exists() {
-            fs::remove_dir_all(&dir).map_err(|error| format!("Couldn't uninstall {}: {error}", app.name))?;
+            if delete_data {
+                fs::remove_dir_all(&dir).map_err(|error| format!("Couldn't uninstall {}: {error}", app.name))?;
+            } else {
+                let manifest = apps.join(format!("{id}.files.json"));
+                let files: Vec<String> = serde_json::from_slice(&fs::read(&manifest).map_err(|_| "This older install has no file list. Use Repair before uninstalling with Keep data, or choose Delete portable data.".to_string())?).map_err(|e| e.to_string())?;
+                for file in &files {
+                    let path = Path::new(file);
+                    if path.is_absolute() || file.contains(':') || file.split(['/', '\\']).any(|part| part == "..") { return Err("App file list contains an unsafe path.".into()); }
+                }
+                for file in files {
+                    let path = dir.join(file);
+                    if path.is_file() { fs::remove_file(path).map_err(|e| e.to_string())?; }
+                }
+            }
         }
         if version.exists() {
             fs::remove_file(&version).map_err(|error| error.to_string())?;
@@ -284,57 +419,24 @@ pub fn uninstall_app(root: &Path, id: &str) -> Result<UpdateOutcome> {
     fs::create_dir_all(logs_dir(root)).map_err(|error| error.to_string())?;
     fs::write(logs_dir(root).join("recent.json"), serde_json::to_string_pretty(&recent).map_err(|error| error.to_string())?)
         .map_err(|error| error.to_string())?;
-    push_log(root, id, "Uninstalled", "Removed the app and its portable data. Update to install it again.")?;
+    let manifest = apps.join(format!("{id}.files.json"));
+    if manifest.is_file() { fs::remove_file(manifest).map_err(|e| e.to_string())?; }
+    push_log(root, id, "Uninstalled", if delete_data { "Removed the app and its portable data. Install to download it again." } else { "Removed app files. Portable settings and projects were kept. Install to use them again." })?;
     Ok(UpdateOutcome { status: format!("{} uninstalled", app.name) })
 }
 
-fn update_source(root: &Path, app: &CraftApp) -> Result<Option<LogEntry>> {
-    let dir = root.join("repo").join(app.id);
-    if !dir.join(".git").is_dir() {
-        fs::create_dir_all(root.join("repo")).map_err(|error| error.to_string())?;
-        let status = git_at(
-            root,
-            &[
-                "clone",
-                &format!("https://github.com/storytold/{}.git", app.id),
-                &dir.to_string_lossy(),
-            ],
-        )?;
-        let head = git(&dir, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
-        return Ok(Some(log_entry(
-            &format!("Cloned source {head}"),
-            &status,
-        )));
-    }
-
-    git(&dir, &["fetch", "--prune", "--quiet", "origin"])?;
-    let local = git(&dir, &["rev-parse", "HEAD"])?;
-    let remote = git(&dir, &["rev-parse", "origin/main"])?;
-    if local == remote {
-        return Ok(None);
-    }
-    let count = git(&dir, &["rev-list", "--count", "HEAD..origin/main"])?
-        .parse::<usize>()
-        .unwrap_or(0);
-    let subjects = git(&dir, &["log", "-n", "12", "--pretty=format:%h  %s", "HEAD..origin/main"])?;
-    let short_local = git(&dir, &["rev-parse", "--short", "HEAD"]).unwrap_or(local);
-    git(&dir, &["pull", "--ff-only", "origin", "main"])?;
-    let short_new = git(&dir, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
-    let mut body = subjects;
-    if count > 12 {
-        body.push_str(&format!("\n…and {} more commits", count - 12));
-    }
-    Ok(Some(log_entry(
-        &format!("Source +{count} · {short_local} → {short_new}"),
-        &body,
-    )))
+#[cfg(test)]
+fn update_binary(root: &Path, app: &CraftApp, on_status: &mut dyn FnMut(String)) -> Result<Option<LogEntry>> {
+    update_binary_controlled(root, app, false, &AtomicBool::new(false), on_status, &mut |_| {})
 }
 
-fn update_binary(root: &Path, app: &CraftApp, on_status: &mut dyn FnMut(String)) -> Result<Option<LogEntry>> {
+fn update_binary_controlled(root: &Path, app: &CraftApp, repair: bool, cancel: &AtomicBool, on_status: &mut dyn FnMut(String), progress: &mut dyn FnMut(Progress)) -> Result<Option<LogEntry>> {
+    transfer::check(cancel)?;
     let release = fetch_release(app.id)?;
+    transfer::check(cancel)?;
     let installed = read_version(root, app.id);
     let exe = exe_path(root, app.id);
-    if installed == release.tag_name && exe.is_file() {
+    if !repair && installed == release.tag_name && exe.is_file() {
         ensure_portable_marker(&exe, app.name);
         return Ok(None);
     }
@@ -351,30 +453,38 @@ fn update_binary(root: &Path, app: &CraftApp, on_status: &mut dyn FnMut(String))
         .ok_or_else(|| format!("Missing file {asset_name}"))?;
 
     on_status(format!("{}: downloading {asset_name}", app.name));
-    let zip_path = std::env::temp_dir().join(&asset_name);
-    let stage = std::env::temp_dir().join(format!("artcraft-stage-{}-{}", app.id, release.tag_name.trim_start_matches('v')));
-    let _ = fs::remove_file(&zip_path);
-    let _ = fs::remove_dir_all(&stage);
-    download(&asset.browser_download_url, &zip_path, |fraction| {
-        let pct = (fraction * 100.0).round() as u32;
-        on_status(format!("{}: downloading {pct}%", app.name));
-    })?;
-
-    extract_zip(&zip_path, &stage)?;
+    let apps = root.join("apps");
+    fs::create_dir_all(&apps).map_err(|e| e.to_string())?;
+    if fs::symlink_metadata(&apps).map_err(|e| e.to_string())?.file_type().is_symlink() || is_reparse_point(&fs::symlink_metadata(&apps).map_err(|e| e.to_string())?) {
+        return Err("App folder is a link or junction. Choose a regular data folder.".into());
+    }
+    let scratch = tempfile::Builder::new().prefix(".craft-stage-").tempdir_in(&apps).map_err(|e| format!("Couldn't prepare download. Check free disk space: {e}"))?;
+    let zip_path = scratch.path().join("package.zip");
+    transfer::download(&asset.browser_download_url, &zip_path, cancel, progress)?;
+    on_status(format!("{}: unpacking...", app.name));
+    let stage = scratch.path().join("unpacked");
+    extract_zip_controlled(&zip_path, &stage, cancel)?;
     let found = find_file(&stage, &format!("{}.exe", app.id))
         .ok_or_else(|| format!("Missing {}.exe in the download", app.id))?;
     let src = found.parent().ok_or("Unexpected zip layout")?;
     let dest = exe.parent().ok_or("Bad install path")?.to_path_buf();
-    copy_dir(src, &dest)?;
-    ensure_portable_marker(&dest.join(format!("{}.exe", app.id)), app.name);
-    fs::create_dir_all(root.join("apps")).map_err(|error| error.to_string())?;
-    fs::write(
-        root.join("apps").join(format!("{}.version", app.id)),
-        &release.tag_name,
-    )
-    .map_err(|error| error.to_string())?;
-    let _ = fs::remove_file(&zip_path);
-    let _ = fs::remove_dir_all(&stage);
+    let shipped = relative_files(src)?;
+    let prepared = scratch.path().join("prepared");
+    // Merge in a private directory so portable user data and the running install
+    // are untouched until every download and copy has succeeded.
+    if dest.exists() {
+        check_uninstall_tree(&dest)?;
+        copy_dir_controlled(&dest, &prepared, cancel)?;
+    }
+    copy_dir_controlled(src, &prepared, cancel)?;
+    ensure_portable_marker(&prepared.join(format!("{}.exe", app.id)), app.name);
+    transfer::check(cancel)?;
+    if app_is_running(app.id)? { return Err(format!("{} is open. Close it, then update.", app.name)); }
+    on_status(format!("{}: installing...", app.name));
+    if let Err(error) = commit_install(&apps, app.id, &prepared, &release.tag_name, &shipped, &scratch.path().join("previous")) {
+        let recovery = scratch.keep();
+        return Err(format!("{error}. Recovery files kept at {}", recovery.display()));
+    }
 
     let from = if installed.is_empty() { "none".to_string() } else { installed };
     let mut body = release.name.unwrap_or_default();
@@ -447,43 +557,19 @@ fn release_assets_from_html(id: &str, tag: &str, html: &str) -> Vec<Asset> {
     }).collect()
 }
 
-fn download(url: &str, dest: &Path, mut on_progress: impl FnMut(f32)) -> Result<()> {
-    let response = download_agent()
-        .get(url)
-        .set("User-Agent", "ArtcraftLauncher")
-        .call()
-        .map_err(|error| format!("Download failed: {error}"))?;
-    let total = response.header("Content-Length").and_then(|value| value.parse::<u64>().ok());
-    let mut reader = response.into_reader();
-    let mut file = File::create(dest).map_err(|error| error.to_string())?;
-    let mut buf = [0_u8; 64 * 1024];
-    let mut got = 0_u64;
-    let mut last_pct = 0_u32;
-    loop {
-        let read = reader.read(&mut buf).map_err(|error| error.to_string())?;
-        if read == 0 {
-            break;
-        }
-        file.write_all(&buf[..read]).map_err(|error| error.to_string())?;
-        got += read as u64;
-        if let Some(total) = total.filter(|total| *total > 0) {
-            let pct = (got * 100 / total) as u32;
-            if pct != last_pct {
-                last_pct = pct;
-                on_progress(got as f32 / total as f32);
-            }
-        }
-    }
-    Ok(())
+#[cfg(test)]
+fn extract_zip(zip_path: &Path, dest: &Path) -> Result<()> {
+    extract_zip_controlled(zip_path, dest, &AtomicBool::new(false))
 }
 
-fn extract_zip(zip_path: &Path, dest: &Path) -> Result<()> {
+fn extract_zip_controlled(zip_path: &Path, dest: &Path, cancel: &AtomicBool) -> Result<()> {
     let file = File::open(zip_path).map_err(|error| error.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
     for index in 0..archive.len() {
+        transfer::check(cancel)?;
         let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
         let name = entry.name().replace('\\', "/");
-        if name.contains("..") || name.starts_with('/') {
+        if name.contains("..") || name.starts_with('/') || name.contains(':') || entry.unix_mode().is_some_and(|mode| mode & 0o170000 == 0o120000) {
             return Err("Zip path is unsafe".into());
         }
         let out = dest.join(&name);
@@ -495,18 +581,25 @@ fn extract_zip(zip_path: &Path, dest: &Path) -> Result<()> {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
         let mut outfile = File::create(&out).map_err(|error| error.to_string())?;
-        std::io::copy(&mut entry, &mut outfile).map_err(|error| error.to_string())?;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            transfer::check(cancel)?;
+            let count = entry.read(&mut buffer).map_err(|e| e.to_string())?;
+            if count == 0 { break; }
+            outfile.write_all(&buffer[..count]).map_err(|e| format!("Couldn't unpack file. Check free disk space: {e}"))?;
+        }
     }
     Ok(())
 }
 
-fn copy_dir(src: &Path, dest: &Path) -> Result<()> {
+fn copy_dir_controlled(src: &Path, dest: &Path, cancel: &AtomicBool) -> Result<()> {
     fs::create_dir_all(dest).map_err(|error| error.to_string())?;
     for entry in fs::read_dir(src).map_err(|error| error.to_string())? {
+        transfer::check(cancel)?;
         let entry = entry.map_err(|error| error.to_string())?;
         let to = dest.join(entry.file_name());
         if entry.path().is_dir() {
-            copy_dir(&entry.path(), &to)?;
+            copy_dir_controlled(&entry.path(), &to, cancel)?;
         } else {
             fs::copy(entry.path(), &to).map_err(|error| format!("Couldn't copy a file: {error}"))?;
         }
@@ -606,29 +699,6 @@ fn trim_chars(text: &str, max: usize) -> String {
     }
 }
 
-fn git(dir: &Path, args: &[&str]) -> Result<String> {
-    let output = command("git").arg("-C").arg(dir).args(args).output().map_err(|error| format!("git: {error}"))?;
-    command_text(output)
-}
-
-fn git_at(dir: &Path, args: &[&str]) -> Result<String> {
-    let output = command("git").current_dir(dir).args(args).output().map_err(|error| format!("git: {error}"))?;
-    command_text(output)
-}
-
-fn command_text(output: std::process::Output) -> Result<String> {
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if err.is_empty() {
-            Err(format!("Command exited with {}", output.status))
-        } else {
-            Err(err)
-        }
-    }
-}
-
 fn api_agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(30))
@@ -636,6 +706,7 @@ fn api_agent() -> ureq::Agent {
         .build()
 }
 
+#[cfg(test)]
 fn download_agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(600))
@@ -656,6 +727,61 @@ fn command(program: &str) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_commit_restores_previous_app_and_version() {
+        let dir = tempfile::tempdir().unwrap(); let apps = dir.path().join("apps"); let stage = apps.join(".craft-stage-test");
+        fs::create_dir_all(apps.join("photocraft")).unwrap(); fs::create_dir_all(&stage).unwrap();
+        fs::write(apps.join("photocraft/photocraft.exe"), b"old").unwrap(); fs::write(apps.join("photocraft.version"), "v1").unwrap();
+        assert!(commit_install(&apps, "photocraft", &stage.join("missing"), "v2", &[], &stage.join("previous")).is_err());
+        assert_eq!(fs::read(apps.join("photocraft/photocraft.exe")).unwrap(), b"old");
+        assert_eq!(fs::read_to_string(apps.join("photocraft.version")).unwrap(), "v1");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn locked_version_file_rolls_back_app_replacement() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = tempfile::tempdir().unwrap(); let apps = dir.path().join("apps"); let stage = apps.join(".craft-stage-test");
+        fs::create_dir_all(apps.join("photocraft")).unwrap(); fs::create_dir_all(stage.join("prepared")).unwrap();
+        fs::write(apps.join("photocraft/photocraft.exe"), b"old").unwrap(); fs::write(apps.join("photocraft.version"), "v1").unwrap();
+        fs::write(stage.join("prepared/photocraft.exe"), b"new").unwrap();
+        let locked = fs::OpenOptions::new().read(true).share_mode(0).open(apps.join("photocraft.version")).unwrap();
+        assert!(commit_install(&apps, "photocraft", &stage.join("prepared"), "v2", &[], &stage.join("previous")).is_err());
+        assert_eq!(fs::read(apps.join("photocraft/photocraft.exe")).unwrap(), b"old");
+        drop(locked); assert_eq!(fs::read_to_string(apps.join("photocraft.version")).unwrap(), "v1");
+    }
+
+    #[test]
+    fn interrupted_commit_recovers_previous_app_on_startup() {
+        let dir = tempfile::tempdir().unwrap(); let apps = dir.path().join("apps"); let stage = apps.join(".craft-stage-test");
+        fs::create_dir_all(stage.join("previous")).unwrap(); fs::create_dir_all(apps.join("photocraft")).unwrap();
+        fs::write(stage.join("previous/photocraft.exe"), b"old").unwrap(); fs::write(apps.join("photocraft/photocraft.exe"), b"new").unwrap();
+        fs::write(stage.join("old.version"), "v1").unwrap(); fs::write(apps.join("photocraft.version"), "v2").unwrap();
+        fs::write(stage.join("transaction.json"), r#"{"id":"photocraft","had_app":true,"had_version":true,"had_manifest":false,"committed":false}"#).unwrap();
+        recover_interrupted_installs(dir.path()).unwrap(); recover_interrupted_installs(dir.path()).unwrap();
+        assert_eq!(fs::read(apps.join("photocraft/photocraft.exe")).unwrap(), b"old");
+        assert_eq!(fs::read_to_string(apps.join("photocraft.version")).unwrap(), "v1");
+    }
+
+    #[test]
+    fn uninstall_can_keep_user_created_portable_data() {
+        let dir = tempfile::tempdir().unwrap(); let apps = dir.path().join("apps");
+        fs::create_dir_all(apps.join("photocraft/settings")).unwrap();
+        fs::write(apps.join("photocraft/photocraft.exe"), b"app").unwrap(); fs::write(apps.join("photocraft/settings/user.json"), b"keep").unwrap();
+        fs::write(apps.join("photocraft.files.json"), r#"["photocraft.exe"]"#).unwrap();
+        uninstall_app_with_data(dir.path(), "photocraft", false).unwrap();
+        assert!(!is_installed(dir.path(), "photocraft")); assert_eq!(fs::read(apps.join("photocraft/settings/user.json")).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn extraction_rejects_parent_traversal() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap(); let archive = dir.path().join("bad.zip");
+        let mut writer = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
+        writer.start_file("../outside.txt", zip::write::SimpleFileOptions::default()).unwrap(); writer.write_all(b"bad").unwrap(); writer.finish().unwrap();
+        assert!(extract_zip(&archive, &dir.path().join("unpacked")).is_err()); assert!(!dir.path().join("outside.txt").exists());
+    }
 
     #[test]
     #[ignore = "Requires GitHub network access"]
