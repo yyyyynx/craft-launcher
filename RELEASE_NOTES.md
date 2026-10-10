@@ -1,3 +1,14 @@
+# CraftLauncher v0.2.0
+
+- Star apps directly from their cards. Selected stars turn gold; click again to remove them.
+- Browse starred apps using **Favorites** in the sidebar, with an app count and search support.
+- Favorites are saved between launches, including apps that are not installed yet.
+- Clicking a star changes its favorite status without opening the app popup.
+
+Choose **Exit** from the tray menu before replacing **CraftLauncher.exe**. Installed apps and update history are kept.
+
+---
+
 # CraftLauncher v0.1.2
 
 ## Stability update

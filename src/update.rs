@@ -123,6 +123,20 @@ pub fn remember_recent(root: &Path, id: &str) -> Vec<String> {
     recent
 }
 
+pub fn load_favorites(root: &Path) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(root.join("favorites.json")) else { return Vec::new() };
+    let stored: Vec<String> = serde_json::from_str(&text).unwrap_or_default();
+    APPS.iter().filter(|app| stored.iter().any(|id| id == app.id))
+        .map(|app| app.id.to_string()).collect()
+}
+
+pub fn save_favorites(root: &Path, favorites: &[String]) -> Result<()> {
+    fs::create_dir_all(root).map_err(|error| format!("Couldn't save Favorites: {error}"))?;
+    let json = serde_json::to_string_pretty(favorites).map_err(|error| error.to_string())?;
+    fs::write(root.join("favorites.json"), json)
+        .map_err(|error| format!("Couldn't save Favorites. Check folder permissions and free disk space. Details: {error}"))
+}
+
 pub fn ensure_baseline(root: &Path) {
     for app in APPS {
         if log_path(root, app.id).is_file() {

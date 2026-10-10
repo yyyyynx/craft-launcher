@@ -1,6 +1,6 @@
 # CraftLauncher
 
-Current version: **v0.1.2**.
+Current version: **v0.2.0**.
 
 **Your ArtCraft apps, together in one place.**
 
@@ -32,6 +32,8 @@ Click **×** to hide CraftLauncher in the Windows system tray. Downloads and upd
 
 Only one instance runs per Windows session. Opening the executable again brings back the existing window, including when it is hidden in the tray.
 
+Click the **star** in the top-left corner of an app icon to add or remove it from **Favorites**. Selected stars turn gold. Choose **Favorites** in the sidebar to view your starred apps, and use search to narrow the list. Favorites are saved between launches and can include apps you have not installed yet.
+
 ## Supported apps
 
 | App | Description | Category | Source |
@@ -53,6 +55,7 @@ Each app popup shows a short description below its name, followed by **GitHub**,
 - Download or update one app at a time, or use **Update all**.
 - Uninstall an individual app beside **Update**, or use **Uninstall all** in the sidebar.
 - Search by app name and browse by category, available updates, or recently opened apps.
+- Star favorite apps and browse them from the **Favorites** sidebar filter.
 - Read release notes and local update history in each app's **Update log**.
 - Visit each app's source, releases, and website directly from its popup.
 - Hide the launcher in the system tray while downloads and updates continue.
@@ -72,6 +75,7 @@ Apps are stored in **`%LOCALAPPDATA%\CraftLauncher\apps`**, regardless of where 
 │   ├── ...
 │   └── photocraft.version
 ├── logs/                   # Update history and recently opened apps
+├── favorites.json          # Starred apps
 └── repo/                   # App source repositories, if Git is available
 ```
 
@@ -97,7 +101,7 @@ Uninstall removes the selected app folder, including any portable settings or pr
 
 App updates come from each app's GitHub releases. To update CraftLauncher itself, download the new `CraftLauncher.exe`, right-click its tray icon and choose **Exit**, then replace the old executable. Clicking **×** only hides the launcher. Your installed apps and update history are kept.
 
-See [CraftLauncher v0.1.2 release notes](RELEASE_NOTES.md) for the latest changes.
+See [CraftLauncher v0.2.0 release notes](RELEASE_NOTES.md) for the latest changes.
 
 ## Special thanks
 

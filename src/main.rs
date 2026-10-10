@@ -28,6 +28,7 @@ enum Filter {
     All,
     Updates,
     Recent,
+    Favorites,
     Group(Group),
 }
 
@@ -59,6 +60,7 @@ struct Launcher {
     remote: HashMap<String, RemoteInfo>,
     logs: HashMap<String, Vec<LogEntry>>,
     recent: Vec<String>,
+    favorites: Vec<String>,
     status: String,
     error: Option<String>,
     busy: Option<String>,
@@ -91,6 +93,7 @@ impl Launcher {
             installed: update::installed_versions(&root).into_iter().collect(),
             logs: APPS.iter().map(|app| (app.id.to_string(), update::load_log(&root, app.id))).collect(),
             recent: update::load_recent(&root),
+            favorites: update::load_favorites(&root),
             root,
             search: String::new(),
             filter: Filter::All,
@@ -186,6 +189,7 @@ impl Launcher {
             Filter::All => true,
             Filter::Updates => self.has_update(app.id),
             Filter::Recent => false,
+            Filter::Favorites => self.favorites.iter().any(|id| id == app.id),
             Filter::Group(group) => app.group == group,
         }
     }
@@ -195,7 +199,21 @@ impl Launcher {
             Filter::All => APPS.len(),
             Filter::Updates => self.update_count(),
             Filter::Recent => self.recent.len(),
+            Filter::Favorites => self.favorites.len(),
             Filter::Group(group) => APPS.iter().filter(|app| app.group == group).count(),
+        }
+    }
+
+    fn toggle_favorite(&mut self, id: &str) {
+        let mut favorites = self.favorites.clone();
+        if let Some(index) = favorites.iter().position(|favorite| favorite == id) {
+            favorites.remove(index);
+        } else {
+            favorites.push(id.to_string());
+        }
+        match update::save_favorites(&self.root, &favorites) {
+            Ok(()) => self.favorites = favorites,
+            Err(error) => self.report_error(error),
         }
     }
 
@@ -788,6 +806,7 @@ impl Launcher {
             Filter::All,
             Filter::Updates,
             Filter::Recent,
+            Filter::Favorites,
             Filter::Group(Group::Image),
             Filter::Group(Group::Video),
             Filter::Group(Group::Design),
@@ -795,7 +814,7 @@ impl Launcher {
         ];
         let mut y = nav.top();
         for (index, filter) in filters.iter().copied().enumerate() {
-            if index == 3 {
+            if index == 4 {
                 ui.painter().text(
                     pos2(nav.left() + 10.0_f32, y + 10.0_f32),
                     Align2::LEFT_CENTER,
@@ -968,6 +987,16 @@ impl Launcher {
             ui.painter().circle_stroke(dot, dot_radius, Stroke::new(2.2_f32, Color32::WHITE));
         }
 
+        let favorite = self.favorites.iter().any(|favorite| favorite == id);
+        let star_rect = Rect::from_center_size(icon_rect.left_top() + vec2(10.0, 10.0), vec2(28.0, 28.0));
+        let star_response = ui.interact(star_rect, Id::new(("favorite", id)), Sense::click());
+        ui.painter().circle_filled(star_rect.center(), 14.0, Color32::from_rgb(38, 34, 48));
+        paint_star(ui.painter(), star_rect.center(), if favorite { Color32::from_rgb(255, 215, 99) } else { TEXT }, favorite);
+        if star_response.clicked() { self.toggle_favorite(id); }
+        let star_hovered = star_response.hovered();
+        star_response.on_hover_cursor(CursorIcon::PointingHand)
+            .on_hover_text(if favorite { "Remove from Favorites" } else { "Add to Favorites" });
+
         let name_y = icon_rect.bottom() + 13.0_f32;
         ui.painter().text(
             pos2(card_rect.center().x, name_y),
@@ -999,10 +1028,10 @@ impl Launcher {
         let version_galley = ui.painter().layout_job(version_job);
         ui.painter().galley(pos2(card_rect.center().x, version_y) - version_galley.size() * 0.5, version_galley, TEXT);
 
-        if response.clicked() {
+        if response.clicked() && !star_hovered {
             self.selected = if self.selected == Some(index) { None } else { Some(index) };
         }
-        if response.double_clicked() {
+        if response.double_clicked() && !star_hovered {
             self.open_index(index);
         }
         response.on_hover_cursor(CursorIcon::PointingHand);
@@ -1434,6 +1463,7 @@ fn nav_name(filter: Filter) -> &'static str {
         Filter::All => "All Apps",
         Filter::Updates => "Updates",
         Filter::Recent => "Recent",
+        Filter::Favorites => "Favorites",
         Filter::Group(group) => group.label(),
     }
 }
@@ -1442,6 +1472,7 @@ fn empty_message(filter: Filter) -> &'static str {
     match filter {
         Filter::Updates => "Everything is up to date",
         Filter::Recent => "No recent apps",
+        Filter::Favorites => "No favorites yet. Click a star to add an app.",
         _ => "No apps found",
     }
 }
@@ -1452,6 +1483,7 @@ fn paint_nav_icon(painter: &egui::Painter, rect: Rect, filter: Filter, color: Co
         Filter::All => paint_grid_icon(painter, center, color),
         Filter::Updates => paint_download(painter, center, color),
         Filter::Recent => paint_bolt(painter, center, color),
+        Filter::Favorites => paint_star(painter, center, color, true),
         Filter::Group(Group::Image) => paint_folder(painter, center, color),
         Filter::Group(Group::Video) => paint_play(painter, center, color),
         Filter::Group(Group::Design) => paint_palette(painter, center, color),
@@ -1482,6 +1514,20 @@ fn paint_download(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
         center + vec2(0.0_f32, 5.6_f32),
     ];
     painter.add(egui::Shape::convex_polygon(head, color, Stroke::NONE));
+}
+
+fn paint_star(painter: &egui::Painter, center: egui::Pos2, color: Color32, filled: bool) {
+    let points: Vec<_> = (0..10).map(|index| {
+        let angle = -std::f32::consts::FRAC_PI_2 + index as f32 * std::f32::consts::PI / 5.0;
+        let radius = if index % 2 == 0 { 9.0 } else { 4.2 };
+        center + vec2(angle.cos(), angle.sin()) * radius
+    }).collect();
+    if filled {
+        for index in 0..10 {
+            painter.add(egui::Shape::convex_polygon(vec![center, points[index], points[(index + 1) % 10]], color, Stroke::NONE));
+        }
+    }
+    painter.add(egui::Shape::closed_line(points, Stroke::new(1.4_f32, color)));
 }
 
 fn paint_bolt(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
@@ -1751,12 +1797,60 @@ mod ui_tests {
             root: std::env::temp_dir().join(format!("craft-ui-test-{}", std::process::id())),
             icons: HashMap::new(), uninstalled_icons: HashMap::new(), search: String::new(), filter: Filter::All,
             selected: Some(0), installed: HashMap::new(), remote: HashMap::new(), logs: HashMap::new(),
-            recent: Vec::new(), status: String::new(), error: None, busy: None, checking: false,
+            recent: Vec::new(), favorites: Vec::new(), status: String::new(), error: None, busy: None, checking: false,
             logo: load_logo(&ctx), glass_hwnd: None, glass_maximized: None, patch_app: None,
             window_shape: None,
             uninstall_target: None, tx, rx,
         };
         (ctx, launcher)
+    }
+
+    #[test]
+    fn clicking_star_does_not_open_app_popup() {
+        let (ctx, mut launcher) = test_launcher();
+        launcher.root = std::env::temp_dir().join(format!("craft-star-click-test-{}", std::process::id()));
+        launcher.selected = None;
+        let pos = pos2(52.0, 23.0);
+        let mut render = |events| {
+            let _ = ctx.run(egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1220.0, 780.0))),
+                events, ..Default::default()
+            }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    launcher.tile(ui, Rect::from_min_size(pos2(0.0, 0.0), vec2(180.0, 164.0)), 0, 96.0);
+                });
+            });
+        };
+        for _ in 0..3 { render(Vec::new()); }
+        render(vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton {
+            pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default(),
+        }]);
+        render(vec![egui::Event::PointerButton {
+            pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default(),
+        }]);
+        assert_eq!(launcher.favorites, vec!["photocraft"]);
+        assert!(launcher.selected.is_none());
+        std::fs::remove_file(launcher.root.join("favorites.json")).unwrap();
+        std::fs::remove_dir(launcher.root).unwrap();
+    }
+
+    #[test]
+    fn favorites_persist_and_filter_matches_search() {
+        let (_, mut launcher) = test_launcher();
+        launcher.root = std::env::temp_dir().join(format!("craft-favorites-test-{}", std::process::id()));
+        launcher.toggle_favorite("photocraft");
+        launcher.toggle_favorite("designcraft");
+        launcher.favorites = update::load_favorites(&launcher.root);
+        launcher.filter = Filter::Favorites;
+        assert_eq!(launcher.visible(), vec![0, 6]);
+        assert_eq!(launcher.nav_count(Filter::Favorites), 2);
+        launcher.search = "design".into();
+        assert_eq!(launcher.visible(), vec![6]);
+        launcher.toggle_favorite("designcraft");
+        assert!(launcher.visible().is_empty());
+        assert_eq!(update::load_favorites(&launcher.root), vec!["photocraft"]);
+        std::fs::remove_file(launcher.root.join("favorites.json")).unwrap();
+        std::fs::remove_dir(launcher.root).unwrap();
     }
 
     #[test]
