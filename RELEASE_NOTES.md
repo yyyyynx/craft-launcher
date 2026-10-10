@@ -35,7 +35,8 @@ This file records changes in the implemented launcher versions, including follow
 - Show Settings as a centered modal with padding, rounded corners, a dimmed backdrop, and the same circular close button as the launcher. Remove collapse and resize controls.
 - Use Lucide stars on both app cards and the Favorites sidebar. Keep their edges rounded and scale card favorite controls with app icons as the window grows.
 - Reduce the launcher logo size in the header and Windows icons.
-- Format log dates with a year when recorded and omit the time. Legacy entries without a year retain their original date information.
+- Format log dates with a year when recorded and omit the time. Legacy entries without a year display an estimated year based on the most recent occurrence of that date; a hover note identifies the estimate.
+- Inset date badges from the right edge so they do not overlap the vertical scrollbar.
 
 ## Build and validation
 

@@ -1493,11 +1493,15 @@ fn patch_section(ui: &mut egui::Ui, when: &str, title: &str, subtitle: &str, bod
     let label = if title.is_empty() { when.to_string() } else { title.to_string() };
     ui.painter().text(pos2(bar.left(), bar.center().y), Align2::LEFT_CENTER, label, egui::FontId::new(15.5_f32, FontFamily::Proportional), TEXT);
     if !when.is_empty() && !title.is_empty() {
-        let when = log_date(when);
+        let (when, inferred) = log_date(when, chrono::Local::now().date_naive());
         let when_w = 116.0_f32;
-        let when_rect = Rect::from_min_size(pos2(bar.right() - when_w, bar.center().y - 11.0_f32), vec2(when_w, 22.0_f32));
+        let when_rect = Rect::from_min_size(pos2(bar.right() - when_w - 20.0_f32, bar.center().y - 11.0_f32), vec2(when_w, 22.0_f32));
         ui.painter().rect_filled(when_rect, 11.0_f32, chip);
         ui.painter().text(when_rect.center(), Align2::CENTER_CENTER, when, egui::FontId::new(13.0_f32, FontFamily::Proportional), chip_text);
+        if inferred {
+            ui.interact(when_rect, ui.id().with(("legacy-log-date", bar.top().to_bits())), Sense::hover())
+                .on_hover_text("This older log did not record a year. The year is estimated from the most recent occurrence of this date.");
+        }
     }
     if !subtitle.is_empty() {
         ui.label(RichText::new(subtitle).size(13.0_f32).color(MUTED));
@@ -1523,16 +1527,23 @@ fn patch_section(ui: &mut egui::Ui, when: &str, title: &str, subtitle: &str, bod
     );
 }
 
-fn log_date(when: &str) -> String {
+fn log_date(when: &str, today: chrono::NaiveDate) -> (String, bool) {
+    use chrono::Datelike;
     if let Ok(date) = chrono::DateTime::parse_from_rfc3339(when) {
-        return date.format("%d %b %Y").to_string();
+        return (date.format("%d %b %Y").to_string(), false);
     }
     for format in ["%d %b %Y", "%d %b %Y %H:%M", "%Y-%m-%d %H:%M:%S"] {
         if let Ok(date) = chrono::NaiveDate::parse_from_str(when, format) {
-            return date.format("%d %b %Y").to_string();
+            return (date.format("%d %b %Y").to_string(), false);
         }
     }
-    when.split_whitespace().filter(|part| !part.contains(':')).collect::<Vec<_>>().join(" ")
+    let date = when.split_whitespace().filter(|part| !part.contains(':')).collect::<Vec<_>>().join(" ");
+    for year in (today.year() - 4..=today.year()).rev() {
+        if let Ok(candidate) = chrono::NaiveDate::parse_from_str(&format!("{date} {year}"), "%d %b %Y") {
+            if candidate <= today { return (candidate.format("%d %b %Y").to_string(), true); }
+        }
+    }
+    (date, false)
 }
 
 fn patch_bullets(body: &str) -> Vec<String> {
@@ -2191,5 +2202,14 @@ mod ui_tests {
             assert!((title.union(status).center().y - button.center().y).abs() < 3.0, "Scale {scale}: button should center beside the text block");
             assert!(status.right() < button.left(), "Scale {scale}: text should not overlap the button");
         }
+    }
+
+    #[test]
+    fn legacy_log_year_is_explicitly_estimated_without_changing_recorded_years() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 10, 10).unwrap();
+        assert_eq!(log_date("10 Oct 14:26", today), ("10 Oct 2026".into(), true));
+        assert_eq!(log_date("31 Dec 14:26", today), ("31 Dec 2025".into(), true));
+        assert_eq!(log_date("10 Oct 2024", today), ("10 Oct 2024".into(), false));
+        assert_eq!(log_date("Available", today), ("Available".into(), false));
     }
 }
