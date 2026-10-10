@@ -902,7 +902,7 @@ impl Launcher {
         ui.painter().text(
             pos2(logo_rect.right() + 10.0_f32, rect.center().y),
             Align2::LEFT_CENTER,
-            concat!("CraftLauncher v", env!("CARGO_PKG_VERSION")),
+            "CraftLauncher",
             egui::FontId::new(16.5_f32, FontFamily::Proportional),
             TEXT,
         );
